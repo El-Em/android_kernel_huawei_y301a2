@@ -10,7 +10,9 @@
  * GNU General Public License for more details.
  */
 
+#ifdef CONFIG_PMIC8XXX_VIBRATOR_INTENSITY_SYSFS
 #include <linux/device.h>
+#endif
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -47,6 +49,7 @@ struct pm8xxx_vib {
 
 static struct pm8xxx_vib *vib_dev;
 
+#ifdef CONFIG_PMIC8XXX_VIBRATOR_INTENSITY_SYSFS
 static ssize_t pm8xxx_level_show(struct device *dev,
 					struct device_attribute *attr,
 					char *buf)
@@ -88,6 +91,7 @@ static ssize_t pm8xxx_level_store(struct device *dev,
 }
 
 static DEVICE_ATTR(level, S_IRUGO | S_IWUSR, pm8xxx_level_show, pm8xxx_level_store);
+#endif
 
 int pm8xxx_vibrator_config(struct pm8xxx_vib_config *vib_config)
 {
@@ -316,10 +320,12 @@ static int __devinit pm8xxx_vib_probe(struct platform_device *pdev)
 	rc = timed_output_dev_register(&vib->timed_dev);
 	if (rc < 0)
 		goto err_read_vib;
-		
+
+#ifdef CONFIG_PMIC8XXX_VIBRATOR_INTENSITY_SYSFS	
 	rc = device_create_file(vib->timed_dev.dev, &dev_attr_level);
 	if (rc < 0)
 		goto err_read_vib;
+#endif
 
 #ifndef CONFIG_HUAWEI_KERNEL
 	pm8xxx_vib_enable(&vib->timed_dev, pdata->initial_vibrate_ms);

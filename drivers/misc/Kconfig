@@ -603,6 +603,13 @@ config PMIC8XXX_VIBRATOR
 	  on the PM8XXX chips. The vibrator is controlled using the
 	  timed output class.
 
+config PMIC8XXX_VIBRATOR_INTENSITY_SYSFS
+	bool "Sysfs for PM8XXX Intensity Level"
+	depends on MFD_PM8XXX && ANDROID_TIMED_OUTPUT
+	default n
+	help
+	  This Option enables a sysfs for controlling vibrator intensity/voltage..
+
 config PMIC8XXX_NFC
 	tristate "Qualcomm PM8XXX support for Near Field Communication"
 	depends on MFD_PM8XXX
