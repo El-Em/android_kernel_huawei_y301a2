@@ -33,6 +33,9 @@
 #include "msm_fb.h"
 #include "mddihost.h"
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+#include <linux/time.h>
+#endif
 static uint32 mdp_last_dma2_update_width;
 static uint32 mdp_last_dma2_update_height;
 static uint32 mdp_curr_dma2_update_width;
@@ -50,6 +53,22 @@ extern u32 msm_fb_debug_enabled;
 extern struct workqueue_struct *mdp_dma_wq;
 
 int vsync_start_y_adjust = 4;
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+char *mdp_dma_display_buffer = NULL;
+unsigned int mdp_dma_point_offset = 0; 
+
+char * mdp_dma_end_display_buffer;
+unsigned int mdp_dma_end_point_offset = 0; 
+extern int display_debug_record_start(void);
+extern unsigned char *msm_frame_base_addr ;
+extern unsigned int msm_framse_base_size ;
+extern unsigned int *msm_frame_base_phy_addr;
+extern unsigned int msm_framse_base_offset;
+extern unsigned int msm_framse_buffer_xres ;
+extern unsigned int msm_framse_buffer_xyres ;
+
+EXPORT_SYMBOL(mdp_dma_point_offset);
+#endif
 
 static void mdp_dma2_update_lcd(struct msm_fb_data_type *mfd)
 {
@@ -318,7 +337,13 @@ void	mdp3_dsi_cmd_dma_busy_wait(struct msm_fb_data_type *mfd)
 
 	if (need_wait) {
 		/* wait until DMA finishes the current job */
+		#ifdef CONFIG_HW_ESD_DETECT
+		/*add qcom patch to solve esd issue*/
+		if (!wait_for_completion_timeout(&mfd->dma->comp, HZ/10))
+			pr_err("Wait timedout: %s %d", __func__, __LINE__);
+		#else
 		wait_for_completion(&mfd->dma->comp);
+		#endif
 	}
 }
 #endif
@@ -486,16 +511,40 @@ void mdp_dma2_update(struct msm_fb_data_type *mfd)
 	int need_wait = 0;
 
 	down(&mfd->dma->mutex);
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	if ((mfd) && (mfd->panel_power_on) && mfd->is_panel_alive) {
+	#else
 	if ((mfd) && (mfd->panel_power_on)) {
+	#endif
 		down(&mfd->sem);
 		spin_lock_irqsave(&mdp_spin_lock, flag);
 		if (mfd->dma->busy == TRUE)
 			need_wait++;
 		spin_unlock_irqrestore(&mdp_spin_lock, flag);
 
-		if (need_wait)
+		#ifdef CONFIG_HW_ESD_DETECT
+		/*add qcom patch to solve esd issue*/
+		if (need_wait) {
+			if (wait_for_completion_killable_timeout(
+						&mfd->dma->comp, HZ/10) <= 0) {
+				spin_lock_irqsave(&mdp_spin_lock, flag);
+				mfd->dma->busy = FALSE;
+				spin_unlock_irqrestore(&mdp_spin_lock, flag);
+				mdp_disable_irq(MDP_DMA2_TERM);
+				mdp_pipe_ctrl(MDP_DMA2_BLOCK,
+						MDP_BLOCK_POWER_OFF, FALSE);
+				up(&mfd->sem);
+				up(&mfd->dma->mutex);
+				pr_err("Timedout DMA: %s %d",
+							__func__, __LINE__);
+				return;
+			}
+		}
+		#else
+		if (need_wait) 
 			wait_for_completion_killable(&mfd->dma->comp);
-
+		#endif
 		/* schedule DMA to start */
 		mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
 		mfd->ibuf_flushed = TRUE;
@@ -628,24 +677,142 @@ void mdp_set_dma_pan_info(struct fb_info *info, struct mdp_dirty_region *dirty,
 	up(&mfd->sem);
 }
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+/*****************************************
+  @func_name:  mdp_dma_pan_display_time
+  @para: void
+  @func: record the framebuffer pixel data  and time
+             wait push framebuffer to lcd
+  @return  void
+******************************************/
+static int mdp_dma_pan_display_time(void)
+{ 
+	struct timespec ts;
+	long report_pointer_time_ms = 0;
+	static  unsigned int i=0;
+	char reg_value_r = 0;
+	char reg_value_g = 0;
+	char reg_value_b = 0;
+	unsigned int real_addr_offset = 0;
+	unsigned int lcd_real_xres = 0;
+
+	if(0 == display_debug_record_start())
+	{
+		return 0;
+	}
+
+	mdp_dma_point_offset  = strlen(mdp_dma_display_buffer);
+
+	/* calcule the time  */
+	ktime_get_ts(&ts);
+	report_pointer_time_ms = ts.tv_sec*1000 + ts.tv_nsec/1000000;
+
+	/*  get the  real offset  */
+	if(0 == msm_framse_buffer_xres % 32)
+	{
+        	lcd_real_xres = msm_framse_buffer_xres;
+	}
+       else
+	{
+        	lcd_real_xres = (msm_framse_buffer_xres/32+1)*32;
+	}
+
+	real_addr_offset = lcd_real_xres*msm_framse_base_offset*4;
+
+	/*  get R,G,B pixel  data  */
+	reg_value_r  = *(msm_frame_base_addr+real_addr_offset);
+	reg_value_g  = *(msm_frame_base_addr+real_addr_offset+1);
+	reg_value_b  = *(msm_frame_base_addr+real_addr_offset+2);
+
+
+	sprintf((mdp_dma_display_buffer+mdp_dma_point_offset),"%d%s%ld%s\
+	%s%d%s\n",
+	i++,DISPLAY_BREAK ,report_pointer_time_ms,DISPLAY_BREAK,\
+	DISPLAY_RGB_BLU,reg_value_b,DISPLAY_BREAK);
+
+
+	if(RECORD_BUFFER_THRESHOLD < mdp_dma_point_offset)
+	{
+       	memset(mdp_dma_display_buffer,0,sizeof(mdp_dma_display_buffer));
+	}
+    
+	return 0; 
+}
+/*****************************************
+  @func_name:  mdp_dma_end_display_time
+  @para: void
+  @func: we have push the data to lcd ,record the time 
+  @return  void
+******************************************/
+static void mdp_dma_end_display_time(void)  
+{  
+	struct timespec ts;
+	long report_pointer_time_ms = 0;
+	static  unsigned int i=0;
+
+	if(0 == display_debug_record_start())
+	{
+       	 return;
+	}
+
+	mdp_dma_end_point_offset  = strlen(mdp_dma_end_display_buffer);
+
+	/* calcule the time  */
+	ktime_get_ts(&ts);
+	report_pointer_time_ms = ts.tv_sec*1000 + ts.tv_nsec/1000000; 
+
+	sprintf((mdp_dma_end_display_buffer+mdp_dma_end_point_offset),"%d%s%ld%s%s",\
+	i++,DISPLAY_BREAK ,report_pointer_time_ms,DISPLAY_BREAK,"\n");
+
+	if(RECORD_BUFFER_THRESHOLD < mdp_dma_end_point_offset)
+	{
+	        memset(mdp_dma_end_display_buffer,0,sizeof(mdp_dma_end_display_buffer));
+	        mdp_dma_end_point_offset = 0;
+	}
+}  
+#endif
 void mdp_dma_pan_update(struct fb_info *info)
 {
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
 	MDPIBUF *iBuf;
-
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+	/*  record  the start time */
+	mdp_dma_pan_display_time();
+#endif
 	iBuf = &mfd->ibuf;
 
 	if (mfd->sw_currently_refreshing) {
 		/* we need to wait for the pending update */
 		mfd->pan_waiting = TRUE;
 		if (!mfd->ibuf_flushed) {
+			#ifdef CONFIG_HW_ESD_DETECT
+			/*add qcom patch to solve esd issue*/
+			if (wait_for_completion_killable_timeout(&mfd->pan_comp,
+							HZ/10))
+				pr_err("Timedout DMA: %s %d", __func__,
+							__LINE__);
+			#else
 			wait_for_completion_killable(&mfd->pan_comp);
+			#endif
 		}
 		/* waiting for this update to complete */
 		mfd->pan_waiting = TRUE;
+		#ifdef CONFIG_HW_ESD_DETECT
+		/*add qcom patch to solve esd issue*/
+		if (wait_for_completion_killable_timeout(&mfd->pan_comp,
+							HZ/10) <= 10)
+			pr_err("Timedout DMA: %s %d", __func__,
+							__LINE__);
+		#else
 		wait_for_completion_killable(&mfd->pan_comp);
+		#endif
 	} else
 		mfd->dma_fnc(mfd);
+
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+	/*  record the end time */
+	mdp_dma_end_display_time();
+#endif
 }
 
 void mdp_refresh_screen(unsigned long data)

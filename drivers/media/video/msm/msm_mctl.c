@@ -48,6 +48,8 @@
 #endif
 
 #define MSM_V4L2_SWFI_LATENCY 3
+uint32_t my_mctl_handle = 0;
+
 /* VFE required buffer number for streaming */
 static struct msm_isp_color_fmt msm_isp_formats[] = {
 	{
@@ -171,6 +173,38 @@ static struct msm_isp_color_fmt msm_isp_formats[] = {
 	.colorspace = V4L2_COLORSPACE_JPEG,
 	},
 };
+static int msm_get_sensor_info_projectmenu(
+	struct msm_cam_media_controller *mctl,
+	void __user *arg)
+{
+	int rc = 0;
+	struct msm_camsensor_info info;
+	struct msm_camera_sensor_info *sdata;
+	struct  msm_sensor_ctrl_t * psctl =NULL;
+	/* copy from user space */
+	if (copy_from_user(&info,
+			arg,
+			sizeof(struct msm_camsensor_info))) {
+		ERR_COPY_FROM_USER();
+		return -EFAULT;
+	}
+
+	sdata = mctl->sdata;
+	psctl=get_sctrl(mctl->sensor_sdev);
+
+	strncpy((char *)&info.name[0], psctl->sensor_name,MAX_SENSOR_NAME-1);
+	info.name[MAX_SENSOR_NAME-1]='\0';
+	
+	printk("%s: project menu sensor_name %s\n", __func__, (char *)&info.name[0]);
+	/* copy back to user space */
+	if (copy_to_user((void *)arg,
+				&info,
+				sizeof(struct msm_camsensor_info))) {
+		ERR_COPY_TO_USER();
+		rc = -EFAULT;
+	}
+	return rc;
+}
 
 static int msm_get_sensor_info(
 	struct msm_cam_media_controller *mctl,
@@ -202,6 +236,10 @@ static int msm_get_sensor_info(
 	info.actuator_enabled = sdata->actuator_info ? 1 : 0;
 	info.strobe_flash_enabled = sdata->strobe_flash_data ? 1 : 0;
 	info.ispif_supported = mctl->ispif_sdev ? 1 : 0;
+	if(FRONT_CAMERA_2D == sdata->camera_type)
+		info.flip_and_mirror = (CAMERA_FLIP_AND_MIRROR == get_camera_mount_type(CAMERA_IS_FRONT))? 1 : 0;
+	else
+		info.flip_and_mirror = (CAMERA_FLIP_AND_MIRROR == get_camera_mount_type(CAMERA_IS_MAIN))? 1 : 0;
 
 	/* copy back to user space */
 	if (copy_to_user((void *)arg,
@@ -495,6 +533,9 @@ static int msm_mctl_cmd(struct msm_cam_media_controller *p_mctl,
 		}
 		break;
 
+	case MSM_CAM_IOCTL_GET_SENSOR_INFO_PROJECTMENU:
+		rc = msm_get_sensor_info_projectmenu(p_mctl, argp);
+			break;	
 	default:
 		/* ISP config*/
 		D("%s:%d: go to default. Calling msm_isp_config\n",
@@ -611,15 +652,15 @@ static void msm_mctl_release(struct msm_cam_media_controller *p_mctl)
 			VIDIOC_MSM_AXI_RELEASE, NULL);
 	}
 
-	if (p_mctl->csid_sdev) {
-		v4l2_subdev_call(p_mctl->csid_sdev, core, ioctl,
-			VIDIOC_MSM_CSID_RELEASE, NULL);
-	}
-
 	if (p_mctl->csiphy_sdev) {
 		v4l2_subdev_call(p_mctl->csiphy_sdev, core, ioctl,
 			VIDIOC_MSM_CSIPHY_RELEASE,
 			sinfo->sensor_platform_info->csi_lane_params);
+	}
+
+	if (p_mctl->csid_sdev) {
+		v4l2_subdev_call(p_mctl->csid_sdev, core, ioctl,
+			VIDIOC_MSM_CSID_RELEASE, NULL);
 	}
 
 	if (p_mctl->act_sdev) {
@@ -629,6 +670,8 @@ static void msm_mctl_release(struct msm_cam_media_controller *p_mctl)
 
 	v4l2_subdev_call(p_mctl->sensor_sdev, core, s_power, 0);
 
+	v4l2_subdev_call(p_mctl->ispif_sdev,
+			core, ioctl, VIDIOC_MSM_ISPIF_REL, NULL);
 	pm_qos_update_request(&p_mctl->pm_qos_req_list,
 				PM_QOS_DEFAULT_VALUE);
 	pm_qos_remove_request(&p_mctl->pm_qos_req_list);
@@ -711,6 +754,7 @@ int msm_mctl_init(struct msm_cam_v4l2_device *pcam)
 	}
 
 	pmctl = msm_cam_server_get_mctl(pcam->mctl_handle);
+	my_mctl_handle = pcam->mctl_handle;
 	if (!pmctl) {
 		pr_err("%s: invalid mctl controller", __func__);
 		return -EINVAL;

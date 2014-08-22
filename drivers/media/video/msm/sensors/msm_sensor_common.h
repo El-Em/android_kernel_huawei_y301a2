@@ -125,6 +125,7 @@ struct msm_sensor_v4l2_ctrl_info_t {
 	int (*s_v4l2_ctrl) (struct msm_sensor_ctrl_t *,
 		struct msm_sensor_v4l2_ctrl_info_t *, int);
 };
+#define CAMERA_NAME_LEN 128  //this size is same with CAMERA_NAME_LEN in board_msm7627a_camera.c
 
 struct msm_sensor_fn_t {
 	void (*sensor_start_stream) (struct msm_sensor_ctrl_t *);
@@ -156,6 +157,13 @@ struct msm_sensor_fn_t {
 	void (*sensor_adjust_frame_lines) (struct msm_sensor_ctrl_t *s_ctrl);
 	int32_t (*sensor_get_csi_params)(struct msm_sensor_ctrl_t *,
 		struct csi_lane_params_t *);
+	int32_t (*sensor_write_init_settings)(struct msm_sensor_ctrl_t *s_ctrl);
+	int32_t (*sensor_match_module)(struct msm_sensor_ctrl_t *s_ctrl);
+	int32_t (*sensor_set_wb)(struct msm_sensor_ctrl_t *, int);
+	int32_t (*sensor_set_effect)(struct msm_sensor_ctrl_t *, int);
+    int (*sensor_otp_reading)(struct sensor_cfg_data *cfg);
+    void (*sensor_mclk_self_adapt)(struct msm_sensor_ctrl_t *);
+  int  (*sensor_post_init_func)(void *);
 };
 
 struct msm_sensor_csi_info {
@@ -219,6 +227,7 @@ struct msm_sensor_ctrl_t {
 	/* delay (in ms) after power up sequence */
 	uint16_t power_seq_delay;
 	struct msm_sensor_eeprom_data eeprom_data;
+	char *sensor_name;
 };
 
 struct msm_sensor_ctrl_t *get_sctrl(struct v4l2_subdev *sd);

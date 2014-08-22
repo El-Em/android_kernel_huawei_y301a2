@@ -48,6 +48,7 @@ VREG_CONSUMERS(L4) = {
 	REGULATOR_SUPPLY("8038_l4",		NULL),
 	REGULATOR_SUPPLY("HSUSB_1p8",		"msm_otg"),
 	REGULATOR_SUPPLY("iris_vddxo",		"wcnss_wlan.0"),
+    REGULATOR_SUPPLY("sdc_vdd",           "msm_sdcc.4"),
 };
 VREG_CONSUMERS(L5) = {
 	REGULATOR_SUPPLY("8038_l5",		NULL),
@@ -63,6 +64,19 @@ VREG_CONSUMERS(L7) = {
 VREG_CONSUMERS(L8) = {
 	REGULATOR_SUPPLY("8038_l8",		NULL),
 	REGULATOR_SUPPLY("dsi_vdc",		"mipi_dsi.1"),
+	REGULATOR_SUPPLY("cam_avdd",		"4-006c"),
+	REGULATOR_SUPPLY("cam_avdd",		"4-0048"),
+	REGULATOR_SUPPLY("cam_avdd",		"4-007a"),
+	REGULATOR_SUPPLY("cam_avdd",		"4-0036"),
+	REGULATOR_SUPPLY("cam_avdd",		"4-0037"),
+	REGULATOR_SUPPLY("cam_avdd",		"4-005a"),
+	REGULATOR_SUPPLY("cam_avdd",		"4-0078"),	
+	REGULATOR_SUPPLY("cam_avdd",		"4-0034"),	
+	REGULATOR_SUPPLY("cam_avdd",		"4-0042"),	
+	REGULATOR_SUPPLY("cam_avdd",		"4-006e"),
+	REGULATOR_SUPPLY("cam_avdd",		"4-0020"),
+	REGULATOR_SUPPLY("cam_avdd",		"4-001b"),
+    REGULATOR_SUPPLY("cam_avdd",        "4-0050"),
 };
 VREG_CONSUMERS(L9) = {
 	REGULATOR_SUPPLY("8038_l9",		NULL),
@@ -103,7 +117,11 @@ VREG_CONSUMERS(L12) = {
 	REGULATOR_SUPPLY("cam_vdig",		"4-001a"),
 	REGULATOR_SUPPLY("cam_vdig",		"4-006c"),
 	REGULATOR_SUPPLY("cam_vdig",		"4-0048"),
-	REGULATOR_SUPPLY("cam_vdig",            "4-0020"),
+	REGULATOR_SUPPLY("cam_vdig",		"4-0020"),
+	REGULATOR_SUPPLY("cam_dvdd",		"4-0034"),
+	REGULATOR_SUPPLY("cam_dvdd",		"4-0020"),
+	REGULATOR_SUPPLY("cam_dvdd",		"4-001b"),
+    REGULATOR_SUPPLY("cam_dvdd",        "4-0050"),
 };
 VREG_CONSUMERS(L13) = {
 	REGULATOR_SUPPLY("8038_l13",		NULL),
@@ -201,6 +219,19 @@ VREG_CONSUMERS(LVS1) = {
 	REGULATOR_SUPPLY("cam_vio",		"4-006c"),
 	REGULATOR_SUPPLY("cam_vio",		"4-0048"),
 	REGULATOR_SUPPLY("cam_vio",             "4-0020"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-006c"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-0048"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-007a"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-0036"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-0037"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-005a"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-0078"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-0034"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-0042"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-006e"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-0020"),
+	REGULATOR_SUPPLY("cam_iovdd",		"4-001b"),
+    REGULATOR_SUPPLY("cam_iovdd",       "4-0050"),
 };
 VREG_CONSUMERS(LVS2) = {
 	REGULATOR_SUPPLY("8038_lvs2",		NULL),
@@ -458,7 +489,8 @@ VREG_CONSUMERS(VDD_DIG_CORNER) = {
 struct gpio_regulator_platform_data
 msm8930_pm8038_gpio_regulator_pdata[] __devinitdata = {
 	/*        ID          vreg_name     gpio_label     gpio  supply */
-	GPIO_VREG(EXT_5V,     "ext_5v",     "ext_5v_en",     63, NULL),
+	/* To avoid the conflict of gpio63 with aux_pcm,GPIO99 is not used */
+	GPIO_VREG(EXT_5V,     "ext_5v",     "ext_5v_en",     99, NULL),
 	GPIO_VREG(EXT_OTG_SW, "ext_otg_sw", "ext_otg_sw_en", 97, "ext_5v"),
 };
 
@@ -497,14 +529,20 @@ msm8930_rpm_regulator_init_data[] __devinitdata = {
 	RPM_LDO(L2,	 0, 1, 0, 1200000, 1200000, "8038_s2", 0, 0),
 	RPM_LDO(L3,	 0, 1, 0, 3075000, 3075000, NULL,      0, 0),
 	RPM_LDO(L4,	 1, 1, 0, 1800000, 1800000, NULL,      10000, 10000),
+	/*after boot stage, lcd power supply should always power on, and set voltage to 2.85V*/
+#ifdef CONFIG_HUAWEI_KERNEL
+	RPM_LDO(L5,	 1, 1, 0, 2850000, 2850000, NULL,      0, 0),
+#else
 	RPM_LDO(L5,	 0, 1, 0, 2950000, 2950000, NULL,      0, 0),
+#endif
 	RPM_LDO(L6,	 0, 1, 0, 2950000, 2950000, NULL,      0, 0),
 	RPM_LDO(L7,	 0, 1, 0, 2050000, 2050000, "8038_s4", 0, 0),
-	RPM_LDO(L8,	 0, 1, 0, 2800000, 2800000, NULL,      0, 0),
-	RPM_LDO(L9,	 0, 1, 0, 2850000, 2850000, NULL,      0, 0),
+	RPM_LDO(L8,	 0, 1, 0, 2800000, 2850000, NULL,      0, 0),
+	/*after boot stage, lcd power supply should always power on*/
+	RPM_LDO(L9,	 1, 1, 0, 2850000, 2850000, NULL,      0, 0),
 	RPM_LDO(L10,	 0, 1, 0, 2900000, 2900000, NULL,      0, 0),
 	RPM_LDO(L11,	 1, 1, 0, 1800000, 1800000, "8038_s4", 10000, 10000),
-	RPM_LDO(L12,	 0, 1, 0, 1200000, 1200000, "8038_s2", 0, 0),
+	RPM_LDO(L12,	 0, 1, 0, 1100000, 1200000, "8038_s2", 0, 0),
 	RPM_LDO(L13,	 0, 0, 0, 2220000, 2220000, NULL,      0, 0),
 	RPM_LDO(L14,	 0, 1, 0, 1800000, 1800000, NULL,      0, 0),
 	RPM_LDO(L15,	 0, 1, 0, 1800000, 2950000, NULL,      0, 0),

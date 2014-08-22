@@ -126,6 +126,11 @@ struct tag_cmdline {
 	char	cmdline[1];	/* this is the minimum size */
 };
 
+/* runmode : factory , normal */
+#define ATAG_RUNMODE_FLAG  0x54410102
+
+bool is_runmode_factory(void);
+
 /* acorn RiscPC specific information */
 #define ATAG_ACORN	0x41000101
 

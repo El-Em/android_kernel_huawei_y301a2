@@ -299,6 +299,17 @@ out_unlock:
 	return retval;
 }
 
+#ifdef CONFIG_SRECORDER_MSM
+#ifdef CONFIG_SRECORDER_POWERCOLLAPS
+#ifndef CONFIG_KPROBES
+static void emergency_restart_prepare(char *reason)
+{
+    raw_notifier_call_chain(&emergency_reboot_notifier_list, SYS_RESTART, reason);
+}
+#endif
+#endif /* CONFIG_SRECORDER_POWERCOLLAPS */
+#endif /* CONFIG_SRECORDER_MSM */
+
 /**
  *	emergency_restart - reboot the system
  *
@@ -309,6 +320,13 @@ out_unlock:
  */
 void emergency_restart(void)
 {
+#ifdef CONFIG_SRECORDER_MSM
+#ifdef CONFIG_SRECORDER_POWERCOLLAPS
+#ifndef CONFIG_KPROBES
+    emergency_restart_prepare(NULL);
+#endif
+#endif /* CONFIG_SRECORDER_POWERCOLLAPS */
+#endif /* CONFIG_SRECORDER_MSM */
 	kmsg_dump(KMSG_DUMP_EMERG);
 	machine_emergency_restart();
 }
@@ -353,6 +371,43 @@ int unregister_reboot_notifier(struct notifier_block *nb)
 	return blocking_notifier_chain_unregister(&reboot_notifier_list, nb);
 }
 EXPORT_SYMBOL(unregister_reboot_notifier);
+
+#ifdef CONFIG_SRECORDER_MSM
+#ifdef CONFIG_SRECORDER_POWERCOLLAPS
+#ifndef CONFIG_KPROBES
+/**
+ *	register_emergency_reboot_notifier - Register function to be called at reboot time
+ *	@nb: Info about notifier function to be called
+ *
+ *	Registers a function with the list of functions
+ *	to be called at reboot time.
+ *
+ *	Currently always returns zero, as blocking_notifier_chain_register()
+ *	always returns zero.
+ */
+int register_emergency_reboot_notifier(struct notifier_block *nb)
+{
+    return raw_notifier_chain_register(&emergency_reboot_notifier_list, nb);
+}
+EXPORT_SYMBOL(register_emergency_reboot_notifier);
+
+/**
+ *	unregister_emergency_reboot_notifier - Unregister previously registered reboot notifier
+ *	@nb: Hook to be unregistered
+ *
+ *	Unregisters a previously registered reboot
+ *	notifier function.
+ *
+ *	Returns zero on success, or %-ENOENT on failure.
+ */
+int unregister_emergency_reboot_notifier(struct notifier_block *nb)
+{
+    return raw_notifier_chain_unregister(&emergency_reboot_notifier_list, nb);
+}
+EXPORT_SYMBOL(unregister_emergency_reboot_notifier);
+#endif
+#endif /* CONFIG_SRECORDER_POWERCOLLAPS */
+#endif /* CONFIG_SRECORDER_MSM */
 
 /**
  *	kernel_restart - reboot the system
@@ -1198,7 +1253,7 @@ static int override_release(char __user *release, size_t len)
 			rest++;
 		}
 		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
-		copy = min(sizeof(buf), max_t(size_t, 1, len));
+		copy = clamp_t(size_t, len, 1, sizeof(buf));
 		copy = scnprintf(buf, copy, "2.6.%u%s", v, rest);
 		ret = copy_to_user(release, buf, copy + 1);
 	}

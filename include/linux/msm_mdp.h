@@ -73,6 +73,14 @@
 #define MSMFB_METADATA_SET  _IOW(MSMFB_IOCTL_MAGIC, 162, struct msmfb_metadata)
 #define MSMFB_OVERLAY_COMMIT      _IO(MSMFB_IOCTL_MAGIC, 163)
 
+/* add the code for dynamic gamma function  */
+#ifdef CONFIG_FB_DYNAMIC_GAMMA
+#define MSMFB_DYNAMIC_GAMMA       _IOWR(MSMFB_IOCTL_MAGIC, 254, unsigned  int)
+#endif
+
+#ifdef CONFIG_FB_AUTO_CABC
+#define MSMFB_AUTO_CABC           _IOWR(MSMFB_IOCTL_MAGIC, 255, struct msmfb_cabc_config)
+#endif
 #define FB_TYPE_3D_PANEL 0x10101010
 #define MDP_IMGTYPE2_START 0x10000
 #define MSMFB_DRIVER_VERSION	0xF9E8D701
@@ -515,6 +523,20 @@ struct msmfb_metadata {
 struct mdp_page_protection {
 	uint32_t page_protection;
 };
+#ifdef CONFIG_FB_AUTO_CABC
+enum cabc_mode {
+	CABC_MODE_OFF,
+	CABC_MODE_UI,
+	CABC_MODE_STILL,
+	CABC_MODE_MOVING,
+};
+
+struct msmfb_cabc_config {
+	uint32_t mode;
+	uint32_t dimming_on;
+	uint32_t mov_det_on;
+};
+#endif
 
 
 struct mdp_mixer_info {
@@ -525,8 +547,16 @@ struct mdp_mixer_info {
 	int z_order;
 };
 
-#define MAX_PIPE_PER_MIXER  4
+#define MAX_PIPE_PER_MIXER  5
 
+#ifdef CONFIG_FB_DYNAMIC_GAMMA
+enum danymic_gamma_mode {
+	GAMMA25 = 0,
+	GAMMA22,
+	HIGH_LIGHT,
+	LOW_LIGHT,
+};
+#endif
 struct msmfb_mixer_info_req {
 	int mixer_num;
 	int cnt;

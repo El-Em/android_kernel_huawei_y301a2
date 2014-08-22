@@ -26,7 +26,7 @@
 #include <mach/socinfo.h>
 #include "msm-pcm-routing.h"
 #include "../codecs/wcd9304.h"
-
+#include <hsad/config_interface.h>
 /* 8930 machine driver */
 
 #define MSM8930_SPK_ON 1
@@ -50,15 +50,41 @@
 #define GPIO_AUX_PCM_SYNC 65
 #define GPIO_AUX_PCM_CLK 66
 
+/* Merge MI2S patch */
+#define GPIO_MI2S_WS     47
+#define GPIO_MI2S_SCLK   48
+#define GPIO_MI2S_DOUT3  49
+#define GPIO_MI2S_DOUT2  50
+#define GPIO_MI2S_DOUT1  51
+#define GPIO_MI2S_DOUT0  52
+#define GPIO_MI2S_MCLK   53
+
+#define HAC_EN_GPIO 151
+#define DEFUALT_HAC_SWITCH_VALUE 0x0
+#define HAC_ON 1
+#define GPIO_PULL_UP 1
+#define GPIO_PULL_DOWN 0
+
+static int msm8930_hac_switch = DEFUALT_HAC_SWITCH_VALUE;
+#define TPA2015_EN_GPIO     15
+//removed UCM based enable/disable sequence of SPK
+#define GPIO_15_TPA2015_EN  1
+#define GPIO_15_TPA2015_DIS 0
+
+//removed UCM based enable/disable sequence of SPK
+#define TPA_2015_SPK "TPA2015"
+#define TPA_SPK_TYPE_STRING_LENGTH 128
+#define MSM8930_RIGHT_SPEAKER_ENABLE  1
+#define MSM8930_LEFT_SPEAKER_ENABLE   2
 static int msm8930_spk_control;
 static int msm8930_slim_0_rx_ch = 1;
 static int msm8930_slim_0_tx_ch = 1;
 static int msm8930_pmic_spk_gain = DEFAULT_PMIC_SPK_GAIN;
-
+static int msm8930_enable_spk = 0;
 static int msm8930_ext_spk_pamp;
 static int msm8930_btsco_rate = BTSCO_RATE_8KHZ;
 static int msm8930_btsco_ch = 1;
-
+static int msm8930_spk_type_tpa2015 = 0;
 static struct clk *codec_clk;
 static int clk_users;
 
@@ -67,11 +93,56 @@ static int msm8930_headset_gpios_configured;
 static struct snd_soc_jack hs_jack;
 static struct snd_soc_jack button_jack;
 static atomic_t auxpcm_rsc_ref;
+static void tpa2015_enable(void);
+static void tpa2015_disable(void);
+
+/* Merge MI2S patch */
+struct request_gpio {
+	unsigned gpio_no;
+	char *gpio_name;
+};
+
+static struct request_gpio mi2s_gpio[] = {
+	{
+		.gpio_no = GPIO_MI2S_WS,
+		.gpio_name = "MI2S_WS",
+	},
+	{
+		.gpio_no = GPIO_MI2S_SCLK,
+		.gpio_name = "MI2S_SCLK",
+	},
+	{
+		.gpio_no = GPIO_MI2S_DOUT3,
+		.gpio_name = "MI2S_DOUT3",
+	},
+#if 0
+	{
+		.gpio_no = GPIO_MI2S_DOUT2,
+		.gpio_name = "MI2S_DOUT2",
+	},
+	{
+		.gpio_no = GPIO_MI2S_DOUT1,
+		.gpio_name = "MI2S_DOUT1",
+	},
+	{
+		.gpio_no = GPIO_MI2S_DOUT0,
+		.gpio_name = "MI2S_DOUT0",
+	},
+	{
+		.gpio_no = GPIO_MI2S_MCLK,
+		.gpio_name = "MI2S_MCLK",
+	},
+#endif
+};
+
+static struct clk *mi2s_osr_clk;
+static struct clk *mi2s_bit_clk;
+static atomic_t mi2s_rsc_ref;
 
 static int msm8930_enable_codec_ext_clk(
 		struct snd_soc_codec *codec, int enable,
 		bool dapm);
-
+/* modify gpio_level_insert from 1 to 0 */
 static struct sitar_mbhc_config mbhc_cfg = {
 	.headset_jack = &hs_jack,
 	.button_jack = &button_jack,
@@ -82,9 +153,8 @@ static struct sitar_mbhc_config mbhc_cfg = {
 	.mclk_rate = SITAR_EXT_CLK_RATE,
 	.gpio = 0,
 	.gpio_irq = 0,
-	.gpio_level_insert = 1,
+	.gpio_level_insert = 0,
 };
-
 
 static void msm8930_ext_control(struct snd_soc_codec *codec)
 {
@@ -100,6 +170,54 @@ static void msm8930_ext_control(struct snd_soc_codec *codec)
 	}
 
 	snd_soc_dapm_sync(dapm);
+}
+/* get the spk status */
+static int msm8930_get_enable_spk(struct snd_kcontrol *kcontrol,
+    struct snd_ctl_elem_value *ucontrol)
+{
+    if((NULL == ucontrol) || (NULL == kcontrol))
+	{
+	    pr_err("msm8930_get_enable_spk : input error");
+	    return 0;
+	}
+	
+    pr_debug("%s()\n , current enable spk value is %d ", __func__,msm8930_enable_spk);
+    ucontrol->value.integer.value[0] = msm8930_enable_spk;
+    return 0;
+}
+/* function: according to the parameter of "Speaker Enable" ,
+   add the variable for the msm8930_ext_spk_pamp , so as to enable the tpa2015 */
+static int msm8930_set_enable_spk(struct snd_kcontrol *kcontrol,
+       struct snd_ctl_elem_value *ucontrol)
+{
+    int spk_enable = 0;
+	if((NULL == ucontrol) || (NULL == kcontrol))
+	{
+	    pr_err("msm8930_set_enable_spk : input error");
+	    return 0;
+	}
+    pr_debug("%s()\n value is %ld", __func__,ucontrol->value.integer.value[0]);
+    spk_enable = ucontrol->value.integer.value[0];
+
+    if ((msm8930_ext_spk_pamp != 0) && (spk_enable == msm8930_enable_spk))
+       return 0;
+
+    pr_debug("msm8930_ext_spk_pamp value is %d ", msm8930_ext_spk_pamp);
+
+    if ((MSM8930_RIGHT_SPEAKER_ENABLE == spk_enable) && !(msm8930_ext_spk_pamp & SPK_AMP_NEG)) {
+        pr_debug("Enabling only right speaker ");	
+        msm8930_ext_spk_pamp |= SPK_AMP_NEG;
+    } else if ((MSM8930_LEFT_SPEAKER_ENABLE == spk_enable) && !(msm8930_ext_spk_pamp & SPK_AMP_POS)) {
+        pr_debug("Enabling only left speaker ");	
+        msm8930_ext_spk_pamp |= SPK_AMP_POS;	
+    } else if (!spk_enable) {
+       pr_debug("Enabling both speaker ");	
+    } else {
+       pr_err("Unsupported speaker option or state ");
+       return 0;
+    }
+    msm8930_enable_spk = spk_enable;
+    return 1;
 }
 
 static int msm8930_get_spk(struct snd_kcontrol *kcontrol,
@@ -184,7 +302,12 @@ static void msm8960_ext_spk_power_amp_on(u32 spk)
 						return;
 					}
 				}
-				pm8xxx_spk_enable(MSM8930_SPK_ON);
+				if (msm8930_spk_type_tpa2015) {
+					pr_debug("TPA 2015 speaker GPIO enable ");
+					tpa2015_enable();
+				} else {
+					pm8xxx_spk_enable(MSM8930_SPK_ON);
+				}
 			}
 
 			pr_debug("%s: sleeping 10 ms after turning on external "
@@ -218,8 +341,12 @@ static void msm8960_ext_spk_power_amp_off(u32 spk)
 			gpio_direction_output(SPKR_BOOST_GPIO, 0);
 			gpio_free(SPKR_BOOST_GPIO);
 		}
-
-		pm8xxx_spk_enable(MSM8930_SPK_OFF);
+		if (msm8930_spk_type_tpa2015) {
+			pr_debug("TPA 2015 speaker GPIO disable ");
+			tpa2015_disable();
+		} else {
+			pm8xxx_spk_enable(MSM8930_SPK_OFF);
+		}
 		msm8930_ext_spk_pamp = 0;
 		pr_debug("%s: slepping 10 ms after turning on external "
 			" Left Speaker Ampl\n", __func__);
@@ -347,11 +474,11 @@ static const struct snd_soc_dapm_route common_audio_map[] = {
 	{"MIC BIAS2 External", NULL, "Headset Mic"},
 
 	/* Microphone path */
-	{"AMIC1", NULL, "MIC BIAS2 External"},
-	{"MIC BIAS2 External", NULL, "ANCLeft Headset Mic"},
+	{"AMIC1", NULL, "MIC BIAS1 External"},
+	{"MIC BIAS1 External", NULL, "ANCLeft Headset Mic"},
 
-	{"AMIC3", NULL, "MIC BIAS2 External"},
-	{"MIC BIAS2 External", NULL, "ANCRight Headset Mic"},
+	{"AMIC3", NULL, "MIC BIAS1 External"},
+	{"MIC BIAS1 External", NULL, "ANCRight Headset Mic"},
 
 	{"HEADPHONE", NULL, "LDO_H"},
 
@@ -394,6 +521,7 @@ static const struct snd_soc_dapm_route common_audio_map[] = {
 
 };
 
+static const char *spk_enable[] = {"BOTH","RIGHT","LEFT"};
 static const char *spk_function[] = {"Off", "On"};
 static const char *slim0_rx_ch_text[] = {"One", "Two"};
 static const char *slim0_tx_ch_text[] = {"One", "Two", "Three", "Four"};
@@ -402,6 +530,7 @@ static const struct soc_enum msm8930_enum[] = {
 	SOC_ENUM_SINGLE_EXT(2, spk_function),
 	SOC_ENUM_SINGLE_EXT(2, slim0_rx_ch_text),
 	SOC_ENUM_SINGLE_EXT(4, slim0_tx_ch_text),
+	SOC_ENUM_SINGLE_EXT(3, spk_enable)
 };
 
 static const char *btsco_rate_text[] = {"8000", "16000"};
@@ -508,6 +637,110 @@ static int msm8930_pmic_gain_put(struct snd_kcontrol *kcontrol,
 	return ret;
 }
 
+/* The function to pull up GPIO 151 to enable HAC*/
+static void hac_gpio_on(void)
+{
+	int ret = 0;
+	pr_err("%s: Configure HAC GPIO %u",
+			__func__, HAC_EN_GPIO);
+	ret = gpio_request(HAC_EN_GPIO,
+					  "HAC_EN_GPIO");
+	if (ret) {
+			pr_err("%s: Failed to configure hac enable "
+				"gpio %u\n", __func__, HAC_EN_GPIO);
+			return;
+		    }
+
+	pr_err("%s: Enable hac enable gpio %u\n",
+			__func__, HAC_EN_GPIO);
+	gpio_direction_output(HAC_EN_GPIO, GPIO_PULL_UP);
+}
+
+/* The function to pull down GPIO 151 to disable HAC*/
+static void hac_gpio_off(void)
+{
+	pr_err("%s: Pull down and free hac enable gpio %u\n",
+			__func__, HAC_EN_GPIO);
+	gpio_direction_output(HAC_EN_GPIO, GPIO_PULL_DOWN);
+	gpio_free(HAC_EN_GPIO);
+}
+
+static const char *hac_switch_text[] = {"OFF","ON"};
+
+static const struct soc_enum msm8960_hac_switch_enum[] = {
+	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(hac_switch_text),
+						hac_switch_text),
+};
+
+/* The function to get hac status */
+static int msm8930_hac_switch_get(struct snd_kcontrol *kcontrol,
+					struct snd_ctl_elem_value *ucontrol)
+{
+	pr_err("%s: msm8930_hac_switch = %d\n", __func__,
+			 msm8930_hac_switch);
+	ucontrol->value.integer.value[0] = msm8930_hac_switch;
+	return 0;
+}
+
+/* The function to set hac status */
+static int msm8930_hac_switch_put(struct snd_kcontrol *kcontrol,
+					struct snd_ctl_elem_value *ucontrol)
+{
+	int ret = 0;
+	msm8930_hac_switch = ucontrol->value.integer.value[0];
+	pr_err("%s: msm8930_hac_switch = %d"
+			 " ucontrol->value.integer.value[0] = %d\n", __func__,
+			 msm8930_hac_switch,
+			 (int) ucontrol->value.integer.value[0]);
+	if(msm8930_hac_switch){
+		hac_gpio_on();
+		ret = HAC_ON;
+	}else{
+		hac_gpio_off();
+	}
+	return ret;
+}
+//Removed UCM based enable/disable sequence of SPK
+
+/* pull up the gpio15 to enable tpa2015 */
+static void tpa2015_enable(void)
+{
+    int ret = 0;
+    pr_debug("%s: Configure %s GPIO %u", __func__, "TPA2015_GPIO", TPA2015_EN_GPIO);
+	ret = gpio_request(TPA2015_EN_GPIO, "TPA2015_GPIO");
+	if (ret)
+	{
+		return;
+	}
+
+	pr_err("%s: Enable %s gpio %u\n", __func__, "TPA2015_GPIO", TPA2015_EN_GPIO);
+	gpio_direction_output(TPA2015_EN_GPIO, GPIO_15_TPA2015_EN);
+	if (ret) 
+	{
+	    pr_err("%s: Failure: TPA2015_EN_GPIO %u\n",__func__, TPA2015_EN_GPIO);
+		return;
+	}
+}
+/* free the gpio to disable the tpa2015 */
+static void tpa2015_disable(void)
+{
+	int ret = 0;
+    pr_err("%s: Free speaker tpa2015 gpio %u\n",
+					__func__, TPA2015_EN_GPIO);
+
+	
+	ret = gpio_direction_output(TPA2015_EN_GPIO, GPIO_15_TPA2015_DIS);
+	
+	if (ret)  {
+		 pr_err("GPIO disable error %d",ret);
+		 return;
+	}
+	gpio_free(TPA2015_EN_GPIO);
+}
+/* get the status value of tpa2015 */
+/* control the tpa2015 according to the status */
+//removed UCM based enable/disable sequence of SPK
+/* to add HAC structure in ALSA*/
 static const struct snd_kcontrol_new sitar_msm8930_controls[] = {
 	SOC_ENUM_EXT("Speaker Function", msm8930_enum[0], msm8930_get_spk,
 		msm8930_set_spk),
@@ -519,6 +752,11 @@ static const struct snd_kcontrol_new sitar_msm8930_controls[] = {
 		msm8930_pmic_gain_get, msm8930_pmic_gain_put),
 	SOC_ENUM_EXT("Internal BTSCO SampleRate", msm8930_btsco_enum[0],
 		msm8930_btsco_rate_get, msm8930_btsco_rate_put),
+	SOC_ENUM_EXT("HAC",msm8960_hac_switch_enum[0],
+	       msm8930_hac_switch_get,msm8930_hac_switch_put),
+		//removed UCM based enable/disable sequence of SPK
+	SOC_ENUM_EXT("Speaker Enable", msm8930_enum[3], msm8930_get_enable_spk,
+       msm8930_set_enable_spk),
 };
 
 static void *def_sitar_mbhc_cal(void)
@@ -550,9 +788,10 @@ static void *def_sitar_mbhc_cal(void)
 	S(t_ins_complete, 250);
 	S(t_ins_retry, 200);
 #undef S
+/* to change v_hs_max from 1650 to 2000 */
 #define S(X, Y) ((SITAR_MBHC_CAL_PLUG_TYPE_PTR(sitar_cal)->X) = (Y))
 	S(v_no_mic, 30);
-	S(v_hs_max, 1650);
+	S(v_hs_max, 2000);
 #undef S
 #define S(X, Y) ((SITAR_MBHC_CAL_BTN_DET_PTR(sitar_cal)->X) = (Y))
 	S(c[0], 62);
@@ -566,16 +805,20 @@ static void *def_sitar_mbhc_cal(void)
 	S(v_btn_press_delta_sta, 100);
 	S(v_btn_press_delta_cic, 50);
 #undef S
+	/* up the value of btn_high[0]*/
+	/* to change btn_high[0] from 10 to 20;
+	   to change btn_low[1]from 11 to 21. */
 	btn_cfg = SITAR_MBHC_CAL_BTN_DET_PTR(sitar_cal);
 	btn_low = sitar_mbhc_cal_btn_det_mp(btn_cfg, SITAR_BTN_DET_V_BTN_LOW);
 	btn_high = sitar_mbhc_cal_btn_det_mp(btn_cfg, SITAR_BTN_DET_V_BTN_HIGH);
-	btn_low[0] = -50;
-	btn_high[0] = 10;
-	btn_low[1] = 11;
-	btn_high[1] = 38;
-	btn_low[2] = 39;
-	btn_high[2] = 64;
-	btn_low[3] = 65;
+	/* change the low limit from -50 to -500,make sure to detect the headset switch press*/
+	btn_low[0] = -500;
+	btn_high[0] = 60;
+	btn_low[1] = 61;
+	btn_high[1] = 68;
+	btn_low[2] = 69;
+	btn_high[2] = 74;
+	btn_low[3] = 85;
 	btn_high[3] = 91;
 	btn_low[4] = 92;
 	btn_high[4] = 115;
@@ -594,7 +837,7 @@ static void *def_sitar_mbhc_cal(void)
 	gain = sitar_mbhc_cal_btn_det_mp(btn_cfg, SITAR_BTN_DET_GAIN);
 	gain[0] = 11;
 	gain[1] = 9;
-
+        
 	return sitar_cal;
 }
 
@@ -696,12 +939,12 @@ static int msm8930_audrx_init(struct snd_soc_pcm_runtime *rtd)
 	mbhc_cfg.gpio = 37;
 	mbhc_cfg.gpio_irq = gpio_to_irq(mbhc_cfg.gpio);
 	sitar_hs_detect(codec, &mbhc_cfg);
-
-	if (socinfo_get_pmic_model() != PMIC_MODEL_PM8917) {
-		/* Initialize default PMIC speaker gain */
-		pm8xxx_spk_gain(DEFAULT_PMIC_SPK_GAIN);
+	if (!msm8930_spk_type_tpa2015) {
+		if (socinfo_get_pmic_model() != PMIC_MODEL_PM8917) {
+			/* Initialize default PMIC speaker gain */
+			pm8xxx_spk_gain(DEFAULT_PMIC_SPK_GAIN);
+		}
 	}
-
 	return 0;
 }
 
@@ -813,6 +1056,7 @@ static int msm8930_aux_pcm_get_gpios(void)
 
 	pr_debug("%s\n", __func__);
 
+
 	ret = gpio_request(GPIO_AUX_PCM_DOUT, "AUX PCM DOUT");
 	if (ret < 0) {
 		pr_err("%s: Failed to request gpio(%d): AUX PCM DOUT",
@@ -864,6 +1108,124 @@ static int msm8930_aux_pcm_free_gpios(void)
 
 	return 0;
 }
+
+/* Merge MI2S patch */
+static int msm8930_mi2s_free_gpios(void)
+{
+	int	i;
+	for (i = 0; i < ARRAY_SIZE(mi2s_gpio); i++)
+		gpio_free(mi2s_gpio[i].gpio_no);
+	return 0;
+}
+
+static int msm8930_mi2s_hw_params(struct snd_pcm_substream *substream,
+			struct snd_pcm_hw_params *params)
+{
+	int rate = params_rate(params);
+	int bit_clk_set = 0;
+
+	bit_clk_set = 12288000/(rate * 2 * 16);
+	clk_set_rate(mi2s_bit_clk, bit_clk_set);
+	return 1;
+}
+
+
+static void msm8930_mi2s_shutdown(struct snd_pcm_substream *substream)
+{
+
+	if (atomic_dec_return(&mi2s_rsc_ref) == 0) {
+		pr_err("%s: free mi2s resources\n", __func__);
+		if (mi2s_bit_clk) {
+			clk_disable_unprepare(mi2s_bit_clk);
+			clk_put(mi2s_bit_clk);
+			mi2s_bit_clk = NULL;
+		}
+       
+		if (mi2s_osr_clk) {
+			clk_disable_unprepare(mi2s_osr_clk);
+			clk_put(mi2s_osr_clk);
+			mi2s_osr_clk = NULL;
+		}
+	
+		msm8930_mi2s_free_gpios();
+	}
+}
+
+static int configure_mi2s_gpio(void)
+{
+	int	rtn;
+	int	i;
+	int	j;
+	for (i = 0; i < ARRAY_SIZE(mi2s_gpio); i++) {
+		rtn = gpio_request(mi2s_gpio[i].gpio_no,
+						   mi2s_gpio[i].gpio_name);
+		pr_err("%s: gpio = %d, gpio name = %s, rtn = %d\n",
+				 __func__,
+				 mi2s_gpio[i].gpio_no,
+				 mi2s_gpio[i].gpio_name,
+				 rtn);
+		if (rtn) {
+			pr_err("%s: Failed to request gpio %d\n",
+				   __func__,
+				   mi2s_gpio[i].gpio_no);
+			for (j = i; j >= 0; j--)
+				gpio_free(mi2s_gpio[j].gpio_no);
+			goto err;
+		}
+	}
+err:
+	return rtn;
+}
+static int msm8930_mi2s_startup(struct snd_pcm_substream *substream)
+{
+	int ret = 0;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+
+	pr_err("%s: dai name %s %p\n", __func__, cpu_dai->name, cpu_dai->dev);
+
+	if (atomic_inc_return(&mi2s_rsc_ref) == 1) {
+		pr_err("%s: acquire mi2s resources\n", __func__);
+		configure_mi2s_gpio();
+		mi2s_osr_clk = clk_get(cpu_dai->dev, "osr_clk");
+		if (!IS_ERR(mi2s_osr_clk)) {
+			clk_set_rate(mi2s_osr_clk, 12288000);
+			clk_prepare_enable(mi2s_osr_clk);
+		} else 
+			pr_err("Failed to get mi2s_osr_clk\n");
+		mi2s_bit_clk = clk_get(cpu_dai->dev, "bit_clk");
+		if (IS_ERR(mi2s_bit_clk)) {
+			pr_err("Failed to get mi2s_bit_clk\n");
+			clk_disable_unprepare(mi2s_osr_clk);
+			clk_put(mi2s_osr_clk);
+			return PTR_ERR(mi2s_bit_clk);
+		}
+		clk_set_rate(mi2s_bit_clk, 8);
+		ret = clk_prepare_enable(mi2s_bit_clk);
+		if (ret != 0) {
+			pr_err("Unable to enable mi2s_rx_bit_clk\n");
+			clk_put(mi2s_bit_clk);
+			clk_disable_unprepare(mi2s_osr_clk);
+			clk_put(mi2s_osr_clk);
+			return ret;
+		}
+		ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_CBS_CFS);
+		if (ret < 0)
+			ret = snd_soc_dai_set_fmt(codec_dai,
+						  SND_SOC_DAIFMT_CBS_CFS);
+		if (ret < 0)
+			pr_err("set format for codec dai failed\n");
+	}
+
+	return ret;
+}
+
+static struct snd_soc_ops msm8930_mi2s_be_ops = {
+	.startup = msm8930_mi2s_startup,
+	.shutdown = msm8930_mi2s_shutdown,
+	.hw_params = msm8930_mi2s_hw_params,
+};
 
 static int msm8930_startup(struct snd_pcm_substream *substream)
 {
@@ -1117,6 +1479,21 @@ static struct snd_soc_dai_link msm8930_dai[] = {
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA5,
 	},
+	/* Merge MI2S patch */
+	{	
+		.name = "MI2S_TX Hostless",
+		.stream_name = "MI2S_TX Hostless",
+		.cpu_dai_name	= "MI2S_TX_HOSTLESS",
+		.platform_name  = "msm-pcm-hostless",		
+		.dynamic = 1,
+		.codec_dai_name = "snd-soc-dummy-dai",
+		.codec_name = "snd-soc-dummy",
+		.trigger = {SND_SOC_DPCM_TRIGGER_POST, SND_SOC_DPCM_TRIGGER_POST},
+		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
+		.ignore_suspend = 1,
+		.ignore_pmdown_time = 1,
+		/* .be_id = do not care */
+	},
 	/* Backend DAI Links */
 	{
 		.name = LPASS_BE_SLIMBUS_0_RX,
@@ -1290,6 +1667,32 @@ static struct snd_soc_dai_link msm8930_dai[] = {
 		.be_hw_params_fixup = msm8930_be_hw_params_fixup,
 		.ignore_pmdown_time = 1, /* this dainlink has playback support */
 	},
+	/* Merge MI2S patch */
+	{
+		.name = LPASS_BE_MI2S_RX,
+		.stream_name = "MI2S Playback",
+		.cpu_dai_name = "msm-dai-q6-mi2s",
+		.platform_name = "msm-pcm-routing",
+		.codec_name     = "msm-stub-codec.1",
+		.codec_dai_name = "msm-stub-rx",
+		.no_pcm = 1,
+		//.no_codec = 1,
+		.be_id = MSM_BACKEND_DAI_MI2S_RX,
+		.be_hw_params_fixup = msm8930_be_hw_params_fixup,
+		.ops = &msm8930_mi2s_be_ops,
+	},
+	{
+		.name = LPASS_BE_MI2S_TX,
+		.stream_name = "MI2S Capture",
+		.cpu_dai_name = "msm-dai-q6-mi2s",
+		.platform_name = "msm-pcm-routing",
+		.codec_name     = "msm-stub-codec.1",
+		.codec_dai_name = "msm-stub-tx",
+		.no_pcm = 1,
+		//.no_codec = 1,
+		.be_id = MSM_BACKEND_DAI_MI2S_TX,
+		.ops = &msm8930_mi2s_be_ops,
+	},
 };
 
 struct snd_soc_card snd_soc_card_msm8930 = {
@@ -1327,7 +1730,7 @@ static void msm8930_free_headset_mic_gpios(void)
 static int __init msm8930_audio_init(void)
 {
 	int ret;
-
+	char spk_type[TPA_SPK_TYPE_STRING_LENGTH] = {0} ;
 	if (!cpu_is_msm8930() && !cpu_is_msm8930aa() && !cpu_is_msm8627()) {
 		pr_err("%s: Not the right machine type\n", __func__);
 		return -ENODEV ;
@@ -1358,7 +1761,14 @@ static int __init msm8930_audio_init(void)
 		msm8930_headset_gpios_configured = 0;
 	} else
 		msm8930_headset_gpios_configured = 1;
+	get_speaker_type_audio(spk_type,sizeof(spk_type));
 
+	if(0 == strncmp(spk_type,TPA_2015_SPK,sizeof(TPA_2015_SPK))) {
+		pr_debug("TPA speaker enabled in MSM8930 product");
+		msm8930_spk_type_tpa2015 = 1; 
+	}
+	/* Merge MI2S patch */
+	atomic_set(&mi2s_rsc_ref, 0);
 	atomic_set(&auxpcm_rsc_ref, 0);
 	return ret;
 

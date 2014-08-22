@@ -29,6 +29,10 @@
 #include <mach/socinfo.h>
 #include <mach/msm_smsm.h>
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#include <linux/sched.h>
+#endif
+
 #include "smd_private.h"
 #include "modem_notifier.h"
 #include "ramdump.h"
@@ -119,12 +123,34 @@ static int modem_shutdown(const struct subsys_desc *subsys)
 
 #define MODEM_WDOG_CHECK_TIMEOUT_MS 10000
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#define OEM_QMI	"libqmi_oem_main"
+
+static void restart_oem_qmi(void)
+{
+	struct task_struct *tsk = NULL;
+
+	for_each_process(tsk)
+	{
+		if (tsk->comm && !strcmp(tsk->comm, OEM_QMI))
+		{
+			send_sig(SIGKILL, tsk, 0);
+			return;
+		}
+	}
+}
+#endif
+
 static int modem_powerup(const struct subsys_desc *subsys)
 {
 	pil_force_boot("modem_fw");
 	pil_force_boot("modem");
 	enable_irq(Q6FW_WDOG_EXPIRED_IRQ);
 	enable_irq(Q6SW_WDOG_EXPIRED_IRQ);
+#ifdef CONFIG_HUAWEI_KERNEL
+	/* after modem restart, restart oem qmi */
+	restart_oem_qmi();
+#endif
 	return 0;
 }
 

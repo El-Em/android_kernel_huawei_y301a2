@@ -14,6 +14,13 @@
 #include <linux/mmc/core.h>
 #include <linux/mod_devicetable.h>
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#define EMMC_SANDISK_MANFID 0x45
+#define EMMC_HYNIX_MANFID 0x90
+#define EMMC_SAMSUNG_MANFID 0x15
+#define EMMC_TOSHIBA_MANFID 0x11
+#endif
+
 struct mmc_cid {
 	unsigned int		manfid;
 	char			prod_name[8];

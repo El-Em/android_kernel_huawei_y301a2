@@ -19,7 +19,7 @@
 #include <linux/slab.h>
 #include <linux/mfd/pm8xxx/core.h>
 #include <linux/mfd/pm8xxx/vibrator.h>
-
+#include <hsad/config_interface.h>
 #include "../staging/android/timed_output.h"
 
 #define VIB_DRV			0x4A
@@ -158,6 +158,10 @@ retry:
 	else {
 		value = (value > vib->pdata->max_timeout_ms ?
 				 vib->pdata->max_timeout_ms : value);
+	#ifdef CONFIG_HUAWEI_KERNEL
+		value = (value < vib->pdata->min_timeout_ms ?
+			vib->pdata->min_timeout_ms : value);
+	#endif
 		vib->state = 1;
 		hrtimer_start(&vib->vib_timer,
 			      ktime_set(value / 1000, (value % 1000) * 1000000),
@@ -219,7 +223,7 @@ static const struct dev_pm_ops pm8xxx_vib_pm_ops = {
 static int __devinit pm8xxx_vib_probe(struct platform_device *pdev)
 
 {
-	const struct pm8xxx_vibrator_platform_data *pdata =
+	struct pm8xxx_vibrator_platform_data *pdata =
 						pdev->dev.platform_data;
 	struct pm8xxx_vib *vib;
 	u8 val;
@@ -227,7 +231,7 @@ static int __devinit pm8xxx_vib_probe(struct platform_device *pdev)
 
 	if (!pdata)
 		return -EINVAL;
-
+	pdata->level_mV = get_vibrator_voltage();
 	if (pdata->level_mV < VIB_MIN_LEVEL_mV ||
 			 pdata->level_mV > VIB_MAX_LEVEL_mV)
 		return -EINVAL;
@@ -270,7 +274,9 @@ static int __devinit pm8xxx_vib_probe(struct platform_device *pdev)
 	if (rc < 0)
 		goto err_read_vib;
 
+#ifndef CONFIG_HUAWEI_KERNEL
 	pm8xxx_vib_enable(&vib->timed_dev, pdata->initial_vibrate_ms);
+#endif
 
 	platform_set_drvdata(pdev, vib);
 

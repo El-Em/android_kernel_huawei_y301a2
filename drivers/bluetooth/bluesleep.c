@@ -25,7 +25,6 @@
    2007-Jan-24  Motorola         Added mbm_handle_ioi() call to ISR.
 
 */
-
 #include <linux/module.h>	/* kernel module definitions */
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -44,7 +43,7 @@
 #include <linux/param.h>
 #include <linux/bitops.h>
 #include <linux/termios.h>
-#include <mach/gpio.h>
+#include <mach/gpio-v1.h>
 #include <mach/msm_serial_hs.h>
 
 #include <net/bluetooth/bluetooth.h>
@@ -133,7 +132,12 @@ struct proc_dir_entry *bluetooth_dir, *sleep_dir;
 
 static void hsuart_power(int on)
 {
-	if (on) {
+    if(NULL == bsi->uport)
+    {
+        BT_ERR("bsi->uport is null");
+        return;
+    }
+    if (on) {
 		msm_hs_request_clock_on(bsi->uport);
 		msm_hs_set_mctrl(bsi->uport, TIOCM_RTS);
 	} else {
@@ -142,6 +146,25 @@ static void hsuart_power(int on)
 	}
 }
 
+
+void bluesleep_uart_open(struct uart_port *uport)
+{
+	BT_DBG("bluesleep_uart_open");
+	if(bsi->uport == NULL) {
+		BT_DBG("bluesleep_uart_open done");
+		bsi->uport = uport;
+	}
+}
+
+
+void bluesleep_uart_close(struct uart_port *uport)
+{
+	BT_DBG("bluesleep_uart_close");
+	if(bsi->uport == uport) {
+		BT_DBG("bluesleep_uart_close done");		
+		bsi->uport = NULL;
+	}
+}
 
 /**
  * @return 1 if the Host can go to sleep, 0 otherwise.
@@ -165,6 +188,25 @@ void bluesleep_sleep_wakeup(void)
 		/*Activating UART */
 		hsuart_power(1);
 	}
+ #ifdef CONFIG_HUAWEI_KERNEL
+ else
+ {
+     /*Tx idle, Rx busy, we must also make host_wake asserted, that is low
+     * 1 means bt chip can sleep, in bluesleep.c
+     */
+         /* Here we depend on the status of MSM gpio, for stability */
+         if(1 == gpio_get_value(bsi->ext_wake))
+     {
+         printk(KERN_ERR "-bluesleep_sleep_wakeup wakeup bt chip\n");
+         /*0 means wakup bt chip */
+         gpio_set_value(bsi->ext_wake, 0);  
+         /*Activating UART */
+         hsuart_power(1);
+         mod_timer(&tx_timer, jiffies + (TX_TIMER_INTERVAL * HZ));
+         clear_bit(BT_ASLEEP, &flags);
+     } 
+ }
+ #endif
 }
 
 /**
@@ -190,6 +232,9 @@ static void bluesleep_sleep_work(struct work_struct *work)
 		  mod_timer(&tx_timer, jiffies + (TX_TIMER_INTERVAL * HZ));
 			return;
 		}
+	} else if(gpio_get_value(bsi->ext_wake) && !test_bit(BT_ASLEEP, &flags)){
+            mod_timer(&tx_timer, jiffies + (TX_TIMER_INTERVAL * HZ));
+            gpio_set_value(bsi->ext_wake, 0);
 	} else {
 		bluesleep_sleep_wakeup();
 	}
@@ -218,7 +263,7 @@ static void bluesleep_hostwake_task(unsigned long data)
  * Handles proper timer action when outgoing data is delivered to the
  * HCI line discipline. Sets BT_TXDATA.
  */
-static void bluesleep_outgoing_data(void)
+void bluesleep_outgoing_data(void)
 {
 	unsigned long irq_flags;
 
@@ -226,15 +271,17 @@ static void bluesleep_outgoing_data(void)
 
 	/* log data passing by */
 	set_bit(BT_TXDATA, &flags);
-
 	/* if the tx side is sleeping... */
 	if (gpio_get_value(bsi->ext_wake)) {
 
+	    spin_unlock_irqrestore(&rw_lock, irq_flags);
 		BT_DBG("tx was sleeping");
 		bluesleep_sleep_wakeup();
 	}
-
-	spin_unlock_irqrestore(&rw_lock, irq_flags);
+    else
+    {
+	    spin_unlock_irqrestore(&rw_lock, irq_flags);
+    }
 }
 
 /**
@@ -346,9 +393,16 @@ static int bluesleep_start(void)
 
 	/* assert BT_WAKE */
 	gpio_set_value(bsi->ext_wake, 0);
+/* add RISING condition to invoke MSM7230 to update the SLEEP FLAG */
+#ifndef CONFIG_HUAWEI_KERNEL
+    retval = request_irq(bsi->host_wake_irq, bluesleep_hostwake_isr,
+                IRQF_DISABLED | IRQF_TRIGGER_FALLING,
+                "bluetooth hostwake", NULL);
+#else
 	retval = request_irq(bsi->host_wake_irq, bluesleep_hostwake_isr,
-				IRQF_DISABLED | IRQF_TRIGGER_FALLING,
+				IRQF_DISABLED | IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING,
 				"bluetooth hostwake", NULL);
+#endif
 	if (retval  < 0) {
 		BT_ERR("Couldn't acquire BT_HOST_WAKE IRQ");
 		goto fail;
@@ -635,7 +689,7 @@ static int bluesleep_remove(struct platform_device *pdev)
 static struct platform_driver bluesleep_driver = {
 	.remove = bluesleep_remove,
 	.driver = {
-		.name = "bluesleep",
+		.name = "bcm_bluesleep",
 		.owner = THIS_MODULE,
 	},
 };

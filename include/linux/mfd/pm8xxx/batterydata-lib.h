@@ -18,10 +18,18 @@
 #define FCC_CC_COLS		5
 #define FCC_TEMP_COLS		8
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#define PC_CC_ROWS             30
+#else
 #define PC_CC_ROWS             29
+#endif
 #define PC_CC_COLS             13
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#define PC_TEMP_ROWS		31
+#else
 #define PC_TEMP_ROWS		29
+#endif
 #define PC_TEMP_COLS		8
 
 #define MAX_SINGLE_LUT_COLS	20

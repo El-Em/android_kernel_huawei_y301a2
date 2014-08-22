@@ -29,6 +29,9 @@
 #define CHECK_BOUNDS(offset, size, max_size) \
 	(((size) > (max_size)) || ((offset) > ((max_size) - (size))))
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+extern void  msm_fb_ioctl_vsync_time(int  flag);
+#endif
 static int mdss_mdp_overlay_get(struct msm_fb_data_type *mfd,
 				struct mdp_overlay *req)
 {
@@ -777,6 +780,9 @@ static int mdss_mdp_overlay_vsync_ctrl(struct msm_fb_data_type *mfd, int en)
 
 	pr_debug("vsync en=%d\n", en);
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+	msm_fb_ioctl_vsync_time(en);
+#endif
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON, false);
 	if (en)
 		rc = ctl->set_vsync_handler(ctl, mdss_mdp_overlay_handle_vsync);

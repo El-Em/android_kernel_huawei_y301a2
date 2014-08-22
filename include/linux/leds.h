@@ -74,6 +74,9 @@ struct led_classdev {
 	struct list_head	 trig_list;
 	void			*trigger_data;
 #endif
+#ifdef CONFIG_HUAWEI_KERNEL
+    unsigned    gpio;
+#endif
 };
 
 extern int led_classdev_register(struct device *parent,
@@ -174,6 +177,9 @@ struct led_info {
 	const char	*name;
 	const char	*default_trigger;
 	int		flags;
+#ifdef CONFIG_HUAWEI_KERNEL
+    unsigned    gpio;
+#endif
 };
 
 struct led_platform_data {

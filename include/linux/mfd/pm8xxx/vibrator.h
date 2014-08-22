@@ -27,13 +27,14 @@ struct pm8xxx_vib_config {
 	u8			active_low;
 	enum pm8xxx_vib_en_mode	enable_mode;
 };
-
 struct pm8xxx_vibrator_platform_data {
 	int initial_vibrate_ms;
 	int max_timeout_ms;
+#ifdef CONFIG_HUAWEI_KERNEL
+	int min_timeout_ms;
+#endif
 	int level_mV;
 };
-
 int pm8xxx_vibrator_config(struct pm8xxx_vib_config *vib_config);
 
 #endif /* __PMIC8XXX_VIBRATOR_H__ */

@@ -80,6 +80,13 @@ static struct regulator *vbus_otg;
 static struct regulator *mhl_usb_hs_switch;
 static struct power_supply *psy;
 
+#ifdef CONFIG_HUAWEI_KERNEL
+extern int ci13xxx_udc_register_vbus_sn(void (*callback)(int));
+extern void ci13xxx_udc_unregister_vbus_sn(void (*callback)(int));
+extern int ci13xxx_udc_get_enum_count(void);
+extern void ci13xxx_udc_set_enum_count(int count);
+#endif
+
 static bool aca_id_turned_on;
 static inline bool aca_enabled(void)
 {
@@ -745,7 +752,7 @@ static int msm_otg_suspend(struct msm_otg *motg)
 	struct usb_bus *bus = phy->otg->host;
 	struct msm_otg_platform_data *pdata = motg->pdata;
 	int cnt = 0;
-	bool host_bus_suspend, device_bus_suspend, dcp;
+	bool host_bus_suspend, device_bus_suspend, dcp, prop_charger;
 	u32 phy_ctrl_val = 0, cmd_val;
 	unsigned ret;
 	u32 portsc;
@@ -760,6 +767,7 @@ static int msm_otg_suspend(struct msm_otg *motg)
 		test_bit(A_BUS_SUSPEND, &motg->inputs) &&
 		motg->caps & ALLOW_LPM_ON_DEV_SUSPEND;
 	dcp = motg->chg_type == USB_DCP_CHARGER;
+	prop_charger = motg->chg_type == USB_PROPRIETARY_CHARGER;
 
 	/*
 	 * Abort suspend when,
@@ -768,7 +776,7 @@ static int msm_otg_suspend(struct msm_otg *motg)
 	 */
 
 	if ((test_bit(B_SESS_VLD, &motg->inputs) && !device_bus_suspend &&
-		!dcp) || test_bit(A_BUS_REQ, &motg->inputs)) {
+		!dcp && !prop_charger) || test_bit(A_BUS_REQ, &motg->inputs)) {
 		enable_irq(motg->irq);
 		return -EBUSY;
 	}
@@ -836,7 +844,7 @@ static int msm_otg_suspend(struct msm_otg *motg)
 	 */
 	cmd_val = readl_relaxed(USB_USBCMD);
 	if (host_bus_suspend || device_bus_suspend ||
-		(motg->pdata->otg_control == OTG_PHY_CONTROL && dcp))
+		(motg->pdata->otg_control == OTG_PHY_CONTROL))
 		cmd_val |= ASYNC_INTR_CTRL | ULPI_STP_CTRL;
 	else
 		cmd_val |= ULPI_STP_CTRL;
@@ -1053,6 +1061,20 @@ psy_not_supported:
 
 static int msm_otg_notify_chg_type(struct msm_otg *motg)
 {
+#ifdef CONFIG_HUAWEI_KERNEL
+	int charger_type;
+	static int old_chg_type;
+
+	/*
+	 * TODO
+	 * Unify OTG driver charger types and power supply charger types
+	 */
+	if (old_chg_type == motg->chg_type)
+	{
+		return 0;
+	}
+	old_chg_type = motg->chg_type;
+#else
 	static int charger_type;
 
 	/*
@@ -1061,6 +1083,7 @@ static int msm_otg_notify_chg_type(struct msm_otg *motg)
 	 */
 	if (charger_type == motg->chg_type)
 		return 0;
+#endif
 
 	if (motg->chg_type == USB_SDP_CHARGER)
 		charger_type = POWER_SUPPLY_TYPE_USB;
@@ -2274,6 +2297,12 @@ static void msm_otg_sm_work(struct work_struct *w)
 				case USB_DCP_CHARGER:
 					/* Enable VDP_SRC */
 					ulpi_write(otg->phy, 0x2, 0x85);
+#ifdef CONFIG_HUAWEI_KERNEL
+					if(ci13xxx_udc_get_enum_count())
+					{
+						ci13xxx_udc_set_enum_count(0);
+					}
+#endif
 					/* fall through */
 				case USB_PROPRIETARY_CHARGER:
 					msm_otg_notify_charger(motg,
@@ -3737,6 +3766,10 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 		dev_dbg(&pdev->dev, "mode debugfs file is"
 			"not available\n");
 
+#ifdef CONFIG_HUAWEI_KERNEL
+	ci13xxx_udc_register_vbus_sn(&msm_otg_set_vbus_state);
+#endif
+
 	if (motg->pdata->otg_control == OTG_PMIC_CONTROL)
 		pm8921_charger_register_vbus_sn(&msm_otg_set_vbus_state);
 
@@ -3825,6 +3858,9 @@ static int __devexit msm_otg_remove(struct platform_device *pdev)
 		msm_otg_setup_devices(pdev, motg->pdata->mode, false);
 	if (motg->pdata->otg_control == OTG_PMIC_CONTROL)
 		pm8921_charger_unregister_vbus_sn(0);
+#ifdef CONFIG_HUAWEI_KERNEL
+	ci13xxx_udc_unregister_vbus_sn(0);
+#endif
 	msm_otg_mhl_register_callback(motg, NULL);
 	msm_otg_debugfs_cleanup();
 	cancel_delayed_work_sync(&motg->chg_work);

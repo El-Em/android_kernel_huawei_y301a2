@@ -1051,9 +1051,18 @@ static ssize_t pm8xxx_adc_show(struct device *dev,
 	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
 	struct pm8xxx_adc_chan_result result;
 	int rc = -1;
-
+#ifdef CONFIG_HUAWEI_KERNEL
+	if(0 == memcmp(attr->dev_attr.attr.name,"pa_therm_mpp5",sizeof("pa_therm_mpp5")))
+	{
+		rc = pm8xxx_adc_mpp_config_read(PM8XXX_AMUX_MPP_5,attr->index,&result);
+	}
+	else
+	{
+		rc = pm8xxx_adc_read(attr->index, &result);
+	}
+#else
 	rc = pm8xxx_adc_read(attr->index, &result);
-
+#endif
 	if (rc)
 		return 0;
 

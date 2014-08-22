@@ -83,3 +83,12 @@ config EXT4_DEBUG
 
 	  If you select Y here, then you will be able to turn on debugging
 	  with a command such as "echo 1 > /sys/kernel/debug/ext4/mballoc-debug"
+
+config EXT4_HUAWEI_READ_ONLY_RECOVERY
+	bool "EXT4 huawei read only recovery function support"
+	depends on EXT4_FS
+	default n
+	help
+	  Enables recovery function when ext4 filesystem found error and partition change to read only.
+
+	  If you select Y here, then you will be able to turn on recovery function. 

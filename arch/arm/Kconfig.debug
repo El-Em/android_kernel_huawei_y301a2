@@ -2,6 +2,17 @@ menu "Kernel hacking"
 
 source "lib/Kconfig.debug"
 
+config SRECORDER_MSM
+	bool "Enable Reserve 1M memory in MSM platform"
+	default y
+	help
+	   Reserve 1M memory for Srecorder in MSM platform
+config SRECORDER_POWERCOLLAPS
+	bool "Enable Function of catch log when system power down"
+	default n
+	help
+	   Enable Function of catch log when system power down
+
 config STRICT_DEVMEM
 	bool "Filter access to /dev/mem"
 	depends on MMU

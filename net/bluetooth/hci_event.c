@@ -1840,15 +1840,6 @@ static inline void hci_auth_complete_evt(struct hci_dev *hdev, struct sk_buff *s
 			struct hci_cp_auth_requested cp;
 			hci_remove_link_key(hdev, &conn->dst);
 			cp.handle = cpu_to_le16(conn->handle);
-			/*Initiates dedicated bonding as pin or key is missing
-			on remote device*/
-			/*In case if remote device is ssp supported,
-			reduce the security level to MEDIUM if it is HIGH*/
-			if (conn->ssp_mode && conn->auth_initiator &&
-				conn->io_capability != 0x03) {
-				conn->pending_sec_level = BT_SECURITY_HIGH;
-				conn->auth_type = HCI_AT_DEDICATED_BONDING_MITM;
-			}
 			hci_send_cmd(conn->hdev, HCI_OP_AUTH_REQUESTED,
 							sizeof(cp), &cp);
 			hci_dev_unlock(hdev);
@@ -2928,12 +2919,13 @@ static inline void hci_sync_conn_complete_evt(struct hci_dev *hdev, struct sk_bu
 	case 0x1a:	/* Unsupported Remote Feature */
 	case 0x1f:	/* Unspecified error */
 		if (conn->out && conn->attempt < 2) {
-			if (!conn->hdev->is_wbs)
+			if (!conn->hdev->is_wbs) {
 				conn->pkt_type =
 					(hdev->esco_type & SCO_ESCO_MASK) |
 					(hdev->esco_type & EDR_ESCO_MASK);
-			hci_setup_sync(conn, conn->link->handle);
-			goto unlock;
+				hci_setup_sync(conn, conn->link->handle);
+				goto unlock;
+			}
 		}
 		/* fall through */
 

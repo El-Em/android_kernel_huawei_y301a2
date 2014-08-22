@@ -33,6 +33,9 @@
 
 #include <mach/msm_xo.h>
 #include <mach/msm_hsusb.h>
+#ifdef CONFIG_HUAWEI_KERNEL
+#include <hsad/config_interface.h>
+#endif
 
 #define CHG_BUCK_CLOCK_CTRL	0x14
 #define CHG_BUCK_CLOCK_CTRL_8038	0xD
@@ -83,13 +86,23 @@
 #define CHG_COMP_OVR		0x20A
 #define IUSB_FINE_RES		0x2B6
 #define OVP_USB_UVD		0x2B7
-
+#define LED_CHECK_PERIOD_MS		3000
 /* check EOC every 10 seconds */
 #define EOC_CHECK_PERIOD_MS	10000
 /* check for USB unplug every 200 msecs */
 #define UNPLUG_CHECK_WAIT_PERIOD_MS 200
 #define UNPLUG_CHECK_RAMP_MS 25
 #define USB_TRIM_ENTRIES 16
+
+#ifdef CONFIG_HUAWEI_KERNEL
+#define POWEROFF_DELAY_MS    90*1000
+#endif
+
+#ifdef CONFIG_HUAWEI_KERNEL
+#define FUEL_GAUGE_SOC_NEAR_FULL  98
+#endif
+
+static struct platform_driver pm8921_charger_driver;
 
 enum chg_fsm_state {
 	FSM_STATE_OFF_0 = 0,
@@ -235,6 +248,10 @@ struct pm8921_chg_chip {
 	unsigned int			alarm_high_mv;
 	int				cool_temp_dc;
 	int				warm_temp_dc;
+#ifdef CONFIG_HUAWEI_KERNEL
+	int				cold_temp_dc;
+	int				hot_temp_dc;
+#endif
 	unsigned int			temp_check_period;
 	unsigned int			cool_bat_chg_current;
 	unsigned int			warm_bat_chg_current;
@@ -242,6 +259,10 @@ struct pm8921_chg_chip {
 	unsigned int			warm_bat_voltage;
 	unsigned int			is_bat_cool;
 	unsigned int			is_bat_warm;
+#ifdef CONFIG_HUAWEI_KERNEL
+	unsigned int			is_bat_hot;
+	unsigned int			is_bat_cold;
+#endif
 	unsigned int			resume_voltage_delta;
 	int				resume_charge_percent;
 	unsigned int			term_current;
@@ -255,12 +276,9 @@ struct pm8921_chg_chip {
 	struct dentry			*dent;
 	struct bms_notify		bms_notify;
 	int				*usb_trim_table;
-	struct regulator		*vreg_xoadc;
 	bool				ext_charging;
 	bool				ext_charge_done;
 	bool				iusb_fine_res;
-	bool				final_kickstart;
-	bool				lockup_lpm_wrkarnd;
 	DECLARE_BITMAP(enabled_irqs, PM_CHG_MAX_INTS);
 	struct work_struct		battery_id_valid_work;
 	int64_t				batt_id_min;
@@ -276,6 +294,15 @@ struct pm8921_chg_chip {
 	struct delayed_work		eoc_work;
 	struct delayed_work		unplug_check_work;
 	struct delayed_work		vin_collapse_check_work;
+#ifdef CONFIG_HUAWEI_KERNEL
+	struct delayed_work		led_work;
+	struct wake_lock		led_wake_lock;
+#endif
+#ifdef CONFIG_HUAWEI_KERNEL
+	struct delayed_work		poweroff_delay_work;
+	bool		poweroff_delay_work_flag;
+	struct wake_lock		poweroff_wake_lock;
+#endif
 	struct delayed_work		btc_override_work;
 	struct wake_lock		eoc_wake_lock;
 	enum pm8921_chg_cold_thr	cold_thr;
@@ -294,6 +321,10 @@ struct pm8921_chg_chip {
 	int				btc_delay_ms;
 	bool				btc_panic_if_cant_stop_chg;
 	int				stop_chg_upon_expiry;
+	int				usb_type;
+#ifdef CONFIG_HUAWEI_KERNEL
+	bool				mpp5_chg_lmt;
+#endif
 };
 
 /* user space parameter to limit usb current */
@@ -307,9 +338,98 @@ static int usb_target_ma;
 static int charging_disabled;
 static int thermal_mitigation;
 
+#ifdef CONFIG_HUAWEI_KERNEL
+static int force_ps_but_not_chg_temp = false;
+static int force_ps_but_not_chg = false;
+static int debug_enabled = 0;
+static int call_limit_flag,call_limit_current;
+#ifdef pr_fmt
+#undef pr_fmt
+#define pr_fmt(fmt)	PM8921_CHARGER_DEV_NAME " %s: " fmt, __func__
+#endif
+
+#ifdef pr_debug
+#undef pr_debug
+#define pr_debug(fmt, ...) \
+	do{ \
+		if(debug_enabled) \
+		{ \
+			printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__); \
+		} \
+	}while(0); 
+#endif
+#endif
+
 static struct pm8921_chg_chip *the_chip;
 
-static DEFINE_SPINLOCK(lpm_lock);
+
+/* modify for 1.7232 baseline upgrade */
+
+#ifdef CONFIG_HUAWEI_KERNEL
+static struct pm8921_charger_platform_data pm8921_charger_max_mv_4200_data = {
+	.update_time		= 60000,
+	.max_voltage		= 4200,
+	.min_voltage		= 3200,
+	.resume_voltage_delta	= 100,
+	.term_current		= 100,
+	.temp_check_period	= 1,
+	.max_bat_chg_current	= 1500,
+	.warm_bat_voltage	= 4100,
+	.cold_thr = PM_SMBC_BATT_TEMP_COLD_THR__LOW,
+	.hot_thr = PM_SMBC_BATT_TEMP_HOT_THR__HIGH,
+};
+
+static struct pm8921_charger_platform_data pm8921_charger_max_mv_4350_data = {
+	.update_time		= 60000,
+	.max_voltage		= 4350,
+	.min_voltage		= 3200,
+	.resume_voltage_delta	= 100,
+	.term_current		= 100,
+	.temp_check_period	= 1,
+	.max_bat_chg_current	= 1500,
+	.warm_bat_voltage	= 4250,
+	.cold_thr = PM_SMBC_BATT_TEMP_COLD_THR__LOW,
+	.hot_thr = PM_SMBC_BATT_TEMP_HOT_THR__HIGH,
+};
+static struct pm8921_charge_std_data pm8921_charge_TMO_data = {
+	.cool_temp		= 0,
+	.warm_temp		= 42,
+	.hot_temp		= 52,
+	.cold_temp		= 0,
+	.fcc_div_warm_chg_curr = 2,
+};
+
+static struct pm8921_charge_std_data pm8921_charge_others_data = {
+	.cool_temp		= 0,
+	.warm_temp		= 42,
+	.hot_temp		= 52,
+	.cold_temp		= 0,
+	.fcc_div_warm_chg_curr = 2,
+};
+
+static const struct charge_std_map charge_std_map[] = {
+    {"TMO",    &pm8921_charge_TMO_data},
+    {"others",        &pm8921_charge_others_data},
+};
+static int get_prop_batt_temp(struct pm8921_chg_chip *chip, int *temp);
+#endif
+
+#ifdef CONFIG_HUAWEI_KERNEL
+/* added for non_standard charger begin */
+/*
+  *when non_standard charger plug in, nonstand_charger_flag was set to 1.
+  * when non_standard charger plug out, nonstand_charger_flag was set to 0.
+  */
+static int nonstand_charger_flag = 0;
+void set_nonstand_charger_flag(void)
+{
+	nonstand_charger_flag = 1;
+}
+/* added for non_standard charger end */
+
+static int get_prop_batt_present(struct pm8921_chg_chip *chip);
+#endif
+
 #define LPM_ENABLE_BIT	BIT(2)
 static int pm8921_chg_set_lpm(struct pm8921_chg_chip *chip, int enable)
 {
@@ -338,38 +458,10 @@ static int pm8921_chg_set_lpm(struct pm8921_chg_chip *chip, int enable)
 static int pm_chg_write(struct pm8921_chg_chip *chip, u16 addr, u8 reg)
 {
 	int rc;
-	unsigned long flags = 0;
-
-	/* Disable LPM */
-	if (chip->lockup_lpm_wrkarnd) {
-		spin_lock_irqsave(&lpm_lock, flags);
-
-		/*
-		 * This write could have initiated right after a previous write.
-		 * Allow time to settle to go in to lpm from the previous write
-		 */
-		udelay(200);
-		rc = pm8921_chg_set_lpm(chip, 0);
-		if (rc)
-			goto lpm_err;
-
-		/* Wait to come out of LPM */
-		udelay(200);
-	}
 
 	rc = pm8xxx_writeb(chip->dev->parent, addr, reg);
-	if (rc) {
-		pr_err("pm_chg_write failed: addr=%03X, rc=%d\n", addr, rc);
-		goto lpm_err;
-	}
-
-	/* Enable LPM */
-	if (chip->lockup_lpm_wrkarnd)
-		rc = pm8921_chg_set_lpm(chip, 1);
-
-lpm_err:
-	if (chip->lockup_lpm_wrkarnd)
-		spin_unlock_irqrestore(&lpm_lock, flags);
+	if (rc)
+		pr_err("failed: addr=%03X, rc=%d\n", addr, rc);
 
 	return rc;
 }
@@ -401,28 +493,24 @@ static int pm_chg_get_rt_status(struct pm8921_chg_chip *chip, int irq_id)
 					chip->pmic_chg_irq[irq_id]);
 }
 
-static int is_chg_on_bat(struct pm8921_chg_chip *chip)
-{
-	return !(pm_chg_get_rt_status(chip, DCIN_VALID_IRQ)
-			|| pm_chg_get_rt_status(chip, USBIN_VALID_IRQ));
-}
-
-static void pm8921_chg_bypass_bat_gone_debounce(struct pm8921_chg_chip *chip,
-		int bypass)
-{
-	int rc;
-
-	rc = pm_chg_write(chip, COMPARATOR_OVERRIDE, bypass ? 0x89 : 0x88);
-	if (rc) {
-		pr_err("Failed to set bypass bit to %d rc=%d\n", bypass, rc);
-	}
-}
-
 /* Treat OverVoltage/UnderVoltage as source missing */
 static int is_usb_chg_plugged_in(struct pm8921_chg_chip *chip)
 {
 	return pm_chg_get_rt_status(chip, USBIN_VALID_IRQ);
 }
+
+#ifdef CONFIG_HUAWEI_KERNEL
+int is_usb_chg_exist(void)
+{
+	if (!the_chip) 
+	{
+		pr_err("called before init\n");
+		return -EINVAL;
+	}
+	return is_usb_chg_plugged_in(the_chip);
+}
+EXPORT_SYMBOL(is_usb_chg_exist);
+#endif
 
 /* Treat OverVoltage/UnderVoltage as source missing */
 static int is_dc_chg_plugged_in(struct pm8921_chg_chip *chip)
@@ -440,44 +528,49 @@ static int is_batfet_closed(struct pm8921_chg_chip *chip)
 static int pm_chg_get_fsm_state(struct pm8921_chg_chip *chip)
 {
 	u8 temp;
-	int err, ret = 0;
+	int err = 0, ret = 0;
 
 	temp = CAPTURE_FSM_STATE_CMD;
-	err = pm_chg_write(chip, CHG_TEST, temp);
+	err = pm8xxx_writeb(chip->dev->parent, CHG_TEST, temp);
 	if (err) {
 		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
-		return err;
+		goto err_out;
 	}
 
 	temp = READ_BANK_7;
-	err = pm_chg_write(chip, CHG_TEST, temp);
+	err = pm8xxx_writeb(chip->dev->parent, CHG_TEST, temp);
 	if (err) {
 		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
-		return err;
+		goto err_out;
 	}
 
 	err = pm8xxx_readb(chip->dev->parent, CHG_TEST, &temp);
 	if (err) {
 		pr_err("pm8xxx_readb fail: addr=%03X, rc=%d\n", CHG_TEST, err);
-		return err;
+		goto err_out;
 	}
 	/* get the lower 4 bits */
 	ret = temp & 0xF;
 
 	temp = READ_BANK_4;
-	err = pm_chg_write(chip, CHG_TEST, temp);
+	err = pm8xxx_writeb(chip->dev->parent, CHG_TEST, temp);
 	if (err) {
 		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
-		return err;
+		goto err_out;
 	}
 
 	err = pm8xxx_readb(chip->dev->parent, CHG_TEST, &temp);
 	if (err) {
 		pr_err("pm8xxx_readb fail: addr=%03X, rc=%d\n", CHG_TEST, err);
-		return err;
+		goto err_out;
 	}
 	/* get the upper 1 bit */
 	ret |= (temp & 0x1) << 4;
+
+err_out:
+	if (err)
+		return err;
+
 	return  ret;
 }
 
@@ -485,20 +578,24 @@ static int pm_chg_get_fsm_state(struct pm8921_chg_chip *chip)
 static int pm_chg_get_regulation_loop(struct pm8921_chg_chip *chip)
 {
 	u8 temp;
-	int err;
+	int err = 0;
 
 	temp = READ_BANK_6;
-	err = pm_chg_write(chip, CHG_TEST, temp);
+	err = pm8xxx_writeb(chip->dev->parent, CHG_TEST, temp);
 	if (err) {
 		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
-		return err;
+		goto err_out;
 	}
 
 	err = pm8xxx_readb(chip->dev->parent, CHG_TEST, &temp);
 	if (err) {
 		pr_err("pm8xxx_readb fail: addr=%03X, rc=%d\n", CHG_TEST, err);
-		return err;
+		goto err_out;
 	}
+
+err_out:
+	if (err)
+		return err;
 
 	/* return the lower 4 bits */
 	return temp & CHG_ALL_LOOPS;
@@ -514,6 +611,12 @@ static int pm_chg_usb_suspend_enable(struct pm8921_chg_chip *chip, int enable)
 #define CHG_EN_BIT	BIT(7)
 static int pm_chg_auto_enable(struct pm8921_chg_chip *chip, int enable)
 {
+#ifdef CONFIG_HUAWEI_KERNEL
+	if(((force_ps_but_not_chg)||(force_ps_but_not_chg_temp)) && (enable))
+	{
+		return 0;
+	}
+#endif
 	return pm_chg_masked_write(chip, CHG_CNTRL_3, CHG_EN_BIT,
 				enable ? CHG_EN_BIT : 0);
 }
@@ -1414,18 +1517,32 @@ static int pm_power_get_property_mains(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_PRESENT:
 	case POWER_SUPPLY_PROP_ONLINE:
 		val->intval = 0;
-
+#ifdef CONFIG_HUAWEI_KERNEL
+		if (!(the_chip->has_dc_supply)) {
+			val->intval = 0;
+			return 0;
+		}
+#else
 		if (the_chip->has_dc_supply) {
 			val->intval = 1;
 			return 0;
 		}
+#endif
+
+#ifdef CONFIG_HUAWEI_KERNEL
+		if (((force_ps_but_not_chg)||(force_ps_but_not_chg_temp))
+			&& (get_prop_batt_present(the_chip)))
+		{
+			return 0;
+		}
+#endif
 
 		if (the_chip->dc_present) {
 			val->intval = 1;
 			return 0;
 		}
 
-		type = the_chip->usb_psy.type;
+		type = the_chip->usb_type;
 		if (type == POWER_SUPPLY_TYPE_USB_DCP ||
 			type == POWER_SUPPLY_TYPE_USB_ACA ||
 			type == POWER_SUPPLY_TYPE_USB_CDP)
@@ -1521,11 +1638,35 @@ static int pm_power_get_property_usb(struct power_supply *psy,
 		}
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
+#ifdef CONFIG_HUAWEI_KERNEL
+		/*Using this property to check if VBUS has powered */
+		val->intval = is_usb_chg_plugged_in(the_chip);
+		break;
+#endif
 	case POWER_SUPPLY_PROP_ONLINE:
 		val->intval = 0;
 
-		if (the_chip->usb_psy.type == POWER_SUPPLY_TYPE_USB)
+#ifdef CONFIG_HUAWEI_KERNEL
+		if (((force_ps_but_not_chg)||(force_ps_but_not_chg_temp))
+			&& (get_prop_batt_present(the_chip)))
+		{
+			return 0;
+		}
+#endif
+
+		/*fix bugs from weak charger*/
+#ifdef CONFIG_HUAWEI_KERNEL
+		if (the_chip->usb_type == POWER_SUPPLY_TYPE_USB 
+		|| the_chip->usb_type == POWER_SUPPLY_TYPE_USB_CDP 
+		|| the_chip->usb_type == POWER_SUPPLY_TYPE_USB_ACA
+		|| 1 == nonstand_charger_flag)
+		{
+			val->intval = is_usb_chg_plugged_in(the_chip); 
+		}
+#else
+		if (the_chip->usb_type == POWER_SUPPLY_TYPE_USB)
 			val->intval = is_usb_chg_plugged_in(the_chip);
+#endif
 
 		break;
 
@@ -1554,9 +1695,39 @@ static enum power_supply_property msm_batt_power_props[] = {
 	POWER_SUPPLY_PROP_CURRENT_MAX,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
 	POWER_SUPPLY_PROP_TEMP,
+#ifdef CONFIG_HUAWEI_KERNEL
+	POWER_SUPPLY_PROP_TEMP_MPP5,
+#endif
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_CHARGE_NOW,
 };
+/* read mpp5 temperature */
+#ifdef CONFIG_HUAWEI_KERNEL
+#define MAX_TOLERABLE_MPP5_TEMP_DDC 68
+static int get_prop_mpp5_temp(struct pm8921_chg_chip *chip)
+{
+	int rc;
+
+	struct pm8xxx_adc_chan_result result;
+
+	if (chip->battery_less_hardware)
+		return 30;
+
+	rc = pm8xxx_adc_mpp_config_read(PM8XXX_AMUX_MPP_5,ADC_MPP_1_AMUX6,&result);
+	if (rc) {
+		pr_err("error reading adc channel = %d, rc = %d\n",
+					ADC_MPP_1_AMUX6, rc);
+		return rc;
+	}
+	pr_debug("mpp5_temp phy = %lld meas = 0x%llx\n", result.physical,
+						result.measurement);
+	if (result.physical > MAX_TOLERABLE_MPP5_TEMP_DDC)
+		pr_err("MPP5_TEMP= %d > 68degC, device will be shutdown\n",
+							(int) result.physical);
+
+	return (int)result.physical;
+}
+#endif
 
 static int get_prop_battery_uvolts(struct pm8921_chg_chip *chip)
 {
@@ -1616,7 +1787,7 @@ static int get_prop_batt_status(struct pm8921_chg_chip *chip)
 	for (i = 0; i < ARRAY_SIZE(map); i++)
 		if (map[i].fsm_state == fsm_state)
 			batt_state = map[i].batt_state;
-
+		
 	if (fsm_state == FSM_STATE_ON_CHG_HIGHI_1) {
 		if (!pm_chg_get_rt_status(chip, BATT_INSERTED_IRQ)
 			|| !pm_chg_get_rt_status(chip, BAT_TEMP_OK_IRQ)
@@ -1670,6 +1841,14 @@ static int get_prop_batt_capacity(struct pm8921_chg_chip *chip)
 
 fail_voltage:
 	chip->recent_reported_soc = percent_soc;
+
+#ifdef CONFIG_HUAWEI_KERNEL	
+	if(percent_soc >= FUEL_GAUGE_SOC_NEAR_FULL)
+	{
+		percent_soc = MAX_BATTERY_LEVEL;
+	}
+#endif
+
 	return percent_soc;
 }
 
@@ -1704,6 +1883,9 @@ static int get_prop_batt_fcc(struct pm8921_chg_chip *chip)
 	return rc;
 }
 
+#define HIGH_TEMP_MAX    600//60*10,high temperature is 60 degree
+#define LOW_TEMP_MAX    -200//-20*10,low temperature is -20 degree
+
 static int get_prop_batt_charge_now(struct pm8921_chg_chip *chip, int *cc_uah)
 {
 	int rc;
@@ -1715,11 +1897,44 @@ static int get_prop_batt_charge_now(struct pm8921_chg_chip *chip, int *cc_uah)
 
 	return rc;
 }
-
+#define MPP5_STANDARD_OFFSET 3
+#define TEN_TIMES  10
 static int get_prop_batt_health(struct pm8921_chg_chip *chip)
 {
 	int temp;
-
+	int temp_mpp5 =0;
+#ifdef CONFIG_HUAWEI_KERNEL
+	if (!get_prop_batt_present(chip))
+	{
+		return POWER_SUPPLY_HEALTH_DEAD;
+	}
+#endif
+#ifdef CONFIG_HUAWEI_KERNEL
+	/* TODO: need to check reutrn value */
+	get_prop_batt_temp(chip, &temp);
+	temp_mpp5 = get_prop_mpp5_temp( chip);
+	temp_mpp5 = TEN_TIMES*(temp_mpp5 - MPP5_STANDARD_OFFSET);
+	
+	/*not all project using mpp5 temperature to do high temperature alarm*/
+	/*so add mpp5_chg_lmt to define if the project need this feature*/
+	if((temp > 0) && chip->mpp5_chg_lmt)
+	{
+		temp = (temp > temp_mpp5) ? temp:temp_mpp5;
+	}
+	
+	if(temp > HIGH_TEMP_MAX)
+	{
+		return POWER_SUPPLY_HEALTH_OVERHEAT;
+	}
+	else if(temp < LOW_TEMP_MAX)
+	{
+		return POWER_SUPPLY_HEALTH_COLD;
+	}
+	else
+	{
+		return POWER_SUPPLY_HEALTH_GOOD;
+	}
+#else
 	temp = pm_chg_get_rt_status(chip, BATTTEMP_HOT_IRQ);
 	if (temp)
 		return POWER_SUPPLY_HEALTH_OVERHEAT;
@@ -1729,6 +1944,7 @@ static int get_prop_batt_health(struct pm8921_chg_chip *chip)
 		return POWER_SUPPLY_HEALTH_COLD;
 
 	return POWER_SUPPLY_HEALTH_GOOD;
+#endif
 }
 
 static int get_prop_charge_type(struct pm8921_chg_chip *chip)
@@ -1783,6 +1999,43 @@ static int get_prop_batt_temp(struct pm8921_chg_chip *chip, int *temp)
 	return rc;
 }
 
+#ifdef CONFIG_HUAWEI_KERNEL
+static void poweroff_delay(struct work_struct *work)
+{
+	/*If the CUTOFF_BATTERY_LEVEL had been reported for 90s but the headset is still on*/
+	/* power off it forcely to avoid battery overdraw.*/
+	pr_info("poweroff cause of low battery level\n");
+	pm_power_off();
+}
+
+static void poweroff_batt_level_check(struct pm8921_chg_chip *chip)
+{
+	if((chip->recent_reported_soc <= CUTOFF_BATTERY_LEVEL) 
+		&& (!(is_usb_chg_plugged_in(chip)))
+		&&(get_prop_batt_present(chip)))
+	{
+		if(!chip->poweroff_delay_work_flag)
+		{
+			pr_debug("start poweroff delay\n");
+			wake_lock(&chip->poweroff_wake_lock);
+			schedule_delayed_work(&chip->poweroff_delay_work, 
+				round_jiffies_relative(msecs_to_jiffies(POWEROFF_DELAY_MS)));
+			chip->poweroff_delay_work_flag = true;
+		}
+	}
+	else
+	{
+		if(chip->poweroff_delay_work_flag)
+		{
+			pr_debug("cancel poweroff delay\n");
+			cancel_delayed_work_sync(&chip->poweroff_delay_work);
+			chip->poweroff_delay_work_flag = false;
+			wake_unlock(&chip->poweroff_wake_lock);
+		}
+	}
+}
+#endif
+
 static int pm_batt_power_get_property(struct power_supply *psy,
 				       enum power_supply_property psp,
 				       union power_supply_propval *val)
@@ -1791,9 +2044,22 @@ static int pm_batt_power_get_property(struct power_supply *psy,
 	int value;
 	struct pm8921_chg_chip *chip = container_of(psy, struct pm8921_chg_chip,
 								batt_psy);
+#ifdef CONFIG_HUAWEI_KERNEL
+	int batt_level = 0;
+#endif
+	
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
 		val->intval = get_prop_batt_status(chip);
+#ifdef CONFIG_HUAWEI_KERNEL
+
+		batt_level = get_prop_batt_capacity(chip);
+
+		if( (MAX_BATTERY_LEVEL == batt_level) && (POWER_SUPPLY_STATUS_CHARGING == val->intval) )
+		{
+			val->intval = POWER_SUPPLY_STATUS_FULL;
+		}
+#endif
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_TYPE:
 		val->intval = get_prop_charge_type(chip);
@@ -1825,6 +2091,10 @@ static int pm_batt_power_get_property(struct power_supply *psy,
 		}
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
+#ifdef CONFIG_HUAWEI_KERNEL
+		/*to check if the battery level is lower than cutoff level*/
+		poweroff_batt_level_check(chip);
+#endif
 		rc = get_prop_batt_capacity(chip);
 		if (rc >= 0) {
 			val->intval = rc;
@@ -1846,6 +2116,11 @@ static int pm_batt_power_get_property(struct power_supply *psy,
 		if (!rc)
 			val->intval = value;
 		break;
+#ifdef CONFIG_HUAWEI_KERNEL
+	case POWER_SUPPLY_PROP_TEMP_MPP5:
+		val->intval = get_prop_mpp5_temp(chip);
+		break;
+#endif
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
 		rc = get_prop_batt_fcc(chip);
 		if (rc >= 0) {
@@ -1966,6 +2241,18 @@ void pm8921_charger_vbus_draw(unsigned int mA)
 		pr_err("chip not yet initalized\n");
 		return;
 	}
+#ifdef CONFIG_HUAWEI_KERNEL
+	/* if call_limit_flag is true,use smallest current */
+	if(call_limit_flag && mA > call_limit_current)
+	{
+		mA = call_limit_current;
+		pr_info("vbus draw current changed to call_limit_current %d\n",call_limit_current);
+	}
+	if((0 == mA) && (is_usb_chg_plugged_in(the_chip)))
+	{
+		pr_err("not set draw to 0 when charger is present!\n");
+	}
+#endif
 
 	/*
 	 * Reject VBUS requests if USB connection is the only available
@@ -2014,6 +2301,23 @@ void pm8921_charger_vbus_draw(unsigned int mA)
 	spin_unlock_irqrestore(&vbus_lock, flags);
 }
 EXPORT_SYMBOL_GPL(pm8921_charger_vbus_draw);
+
+/* modify for 1.7232 baseline upgrade */
+int pm8921_charger_enable(bool enable)
+{
+	int rc;
+
+	if (!the_chip) {
+		pr_err("called before init\n");
+		return -EINVAL;
+	}
+	enable = !!enable;
+	rc = pm_chg_auto_enable(the_chip, enable);
+	if (rc)
+		pr_err("Failed rc=%d\n", rc);
+	return rc;
+}
+EXPORT_SYMBOL(pm8921_charger_enable);
 
 int pm8921_is_usb_chg_plugged_in(void)
 {
@@ -2238,7 +2542,7 @@ int pm8921_set_usb_power_supply_type(enum power_supply_type type)
 	if (type < POWER_SUPPLY_TYPE_USB && type > POWER_SUPPLY_TYPE_BATTERY)
 		return -EINVAL;
 
-	the_chip->usb_psy.type = type;
+	the_chip->usb_type = type;
 	power_supply_changed(&the_chip->usb_psy);
 	power_supply_changed(&the_chip->dc_psy);
 	return 0;
@@ -2260,116 +2564,55 @@ int pm8921_batt_temperature(void)
 	return temp;
 }
 
-static int __pm8921_apply_19p2mhz_kickstart(struct pm8921_chg_chip *chip)
+#ifdef CONFIG_INPUT_HW_ATE
+void (*ate_notifier_call)(uint8_t);
+void notify_usb_status_to_ate(void (*callback)(uint8_t))
 {
-	int err;
-	u8 temp;
-
-
-	temp  = 0xD1;
-	err = pm8xxx_writeb(chip->dev->parent, CHG_TEST, temp);
-	if (err) {
-		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
-		return err;
-	}
-
-	temp  = 0xD3;
-	err = pm8xxx_writeb(chip->dev->parent, CHG_TEST, temp);
-	if (err) {
-		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
-		return err;
-	}
-
-	temp  = 0xD1;
-	err = pm8xxx_writeb(chip->dev->parent, CHG_TEST, temp);
-	if (err) {
-		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
-		return err;
-	}
-
-	temp  = 0xD5;
-	err = pm8xxx_writeb(chip->dev->parent, CHG_TEST, temp);
-	if (err) {
-		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
-		return err;
-	}
-
-	/* Wait a few clock cycles before re-enabling hw clock switching */
-	udelay(183);
-
-	temp  = 0xD1;
-	err = pm8xxx_writeb(chip->dev->parent, CHG_TEST, temp);
-	if (err) {
-		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
-		return err;
-	}
-
-	temp  = 0xD0;
-	err = pm8xxx_writeb(chip->dev->parent, CHG_TEST, temp);
-	if (err) {
-		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
-		return err;
-	}
-
-	/* Wait for few clock cycles before re-enabling LPM */
-	udelay(32);
-
-	return 0;
+	ate_notifier_call = callback;
 }
-
-static int pm8921_apply_19p2mhz_kickstart(struct pm8921_chg_chip *chip)
-{
-	int err;
-	unsigned long flags = 0;
-
-	spin_lock_irqsave(&lpm_lock, flags);
-	err = pm8921_chg_set_lpm(chip, 0);
-	if (err) {
-		pr_err("Error settig LPM rc=%d\n", err);
-		goto kick_err;
-	}
-
-	__pm8921_apply_19p2mhz_kickstart(chip);
-
-kick_err:
-	err = pm8921_chg_set_lpm(chip, 1);
-	if (err)
-		pr_err("Error settig LPM rc=%d\n", err);
-
-	spin_unlock_irqrestore(&lpm_lock, flags);
-
-	return err;
-}
+#endif
 
 static void handle_usb_insertion_removal(struct pm8921_chg_chip *chip)
 {
-	int usb_present, rc = 0;
-
-	if (chip->lockup_lpm_wrkarnd) {
-		rc = pm8921_apply_19p2mhz_kickstart(chip);
-		if (rc)
-			pr_err("Failed to apply kickstart rc=%d\n", rc);
-	}
+	int usb_present;
 
 	pm_chg_failed_clear(chip, 1);
 	usb_present = is_usb_chg_plugged_in(chip);
+#ifdef CONFIG_INPUT_HW_ATE
+	if(ate_notifier_call != NULL)
+	{
+		(*ate_notifier_call)(usb_present);
+	}
+#endif
 	if (chip->usb_present ^ usb_present) {
+#ifdef CONFIG_HUAWEI_KERNEL
+		if ((usb_present) && (charging_disabled||force_ps_but_not_chg||force_ps_but_not_chg_temp))
+		{
+			charging_disabled = 0;
+			force_ps_but_not_chg = 0;
+			force_ps_but_not_chg_temp = 0;
+			pm_chg_charge_dis(chip, charging_disabled);
+			pm_chg_auto_enable(chip, !charging_disabled);
+		}
+		/*init the charger type to nonstandard*/ 
+		nonstand_charger_flag = !!usb_present;
+#endif
 		notify_usb_of_the_plugin_event(usb_present);
 		chip->usb_present = usb_present;
 		power_supply_changed(&chip->usb_psy);
 		power_supply_changed(&chip->batt_psy);
 		pm8921_bms_calibrate_hkadc();
-
-		/* Enable/disable bypass if charger is on battery */
-		if (chip->lockup_lpm_wrkarnd)
-			pm8921_chg_bypass_bat_gone_debounce(chip,
-				is_chg_on_bat(chip));
 	}
 	if (usb_present) {
 		schedule_delayed_work(&chip->unplug_check_work,
 			msecs_to_jiffies(UNPLUG_CHECK_RAMP_MS));
 		pm8921_chg_enable_irq(chip, CHG_GONE_IRQ);
 	} else {
+#ifdef CONFIG_HUAWEI_KERNEL
+		/* wake_lock for update the state of led,prevent phone enter sleep at once  */
+		wake_lock(&chip->led_wake_lock);
+		schedule_delayed_work(&chip->led_work, round_jiffies_relative(msecs_to_jiffies(LED_CHECK_PERIOD_MS)));
+#endif
 		/* USB unplugged reset target current */
 		usb_target_ma = 0;
 		pm8921_chg_disable_irq(chip, CHG_GONE_IRQ);
@@ -2379,10 +2622,6 @@ static void handle_usb_insertion_removal(struct pm8921_chg_chip *chip)
 
 static void handle_stop_ext_chg(struct pm8921_chg_chip *chip)
 {
-	if (chip->lockup_lpm_wrkarnd)
-		/* Enable bypass if charger is on battery */
-		pm8921_chg_bypass_bat_gone_debounce(chip, is_chg_on_bat(chip));
-
 	if (!chip->ext_psy) {
 		pr_debug("external charger not registered.\n");
 		return;
@@ -2411,10 +2650,6 @@ static void handle_start_ext_chg(struct pm8921_chg_chip *chip)
 	int batt_temp_ok;
 	unsigned long delay =
 		round_jiffies_relative(msecs_to_jiffies(EOC_CHECK_PERIOD_MS));
-
-	/* Disable bypass if charger connected and not running on bat */
-	if (chip->lockup_lpm_wrkarnd)
-		pm8921_chg_bypass_bat_gone_debounce(chip, is_chg_on_bat(chip));
 
 	if (!chip->ext_psy) {
 		pr_debug("external charger not registered.\n");
@@ -2895,27 +3130,11 @@ static void unplug_check_worker(struct work_struct *work)
 			"Stop: chg removed reg_loop = %d, fsm = %d ibat = %d\n",
 				pm_chg_get_regulation_loop(chip),
 				pm_chg_get_fsm_state(chip), ibat);
-			if (chip->lockup_lpm_wrkarnd) {
-				rc = pm8921_apply_19p2mhz_kickstart(chip);
-				if (rc)
-					pr_err("Failed kickstart rc=%d\n", rc);
-
-				/*
-				 * Make sure kickstart happens at least 200 ms
-				 * after charger has been removed.
-				 */
-				if (chip->final_kickstart) {
-					chip->final_kickstart = false;
-					goto check_again_later;
-				}
-			}
 			return;
 		} else {
 			goto check_again_later;
 		}
 	}
-
-	chip->final_kickstart = true;
 
 	/* AICL only for usb wall charger */
 	if ((active_path & USB_ACTIVE_BIT) && usb_target_ma > 0) {
@@ -3025,13 +3244,24 @@ static int find_ibat_max_adj_ma(int ibat_target_ma)
 
 	return ibatmax_adj_table[i].max_adj_ma;
 }
-
+/* do not clear chip->is_bat_warm info */
 static irqreturn_t fastchg_irq_handler(int irq, void *data)
 {
 	struct pm8921_chg_chip *chip = data;
 	int high_transition;
 
 	high_transition = pm_chg_get_rt_status(chip, FASTCHG_IRQ);
+	/* clear temp check info not depend on eoc_work */
+	if(high_transition)
+	{
+#ifdef CONFIG_HUAWEI_KERNEL
+		/*clear temp check info*/
+		chip->is_bat_hot = 0;
+		/* del chip->is_bat_warm,not clear warm info*/
+		chip->is_bat_cool = 0;
+		chip->is_bat_cold = 0;		
+#endif
+	}
 	if (high_transition && !delayed_work_pending(&chip->eoc_work)) {
 		wake_lock(&chip->eoc_wake_lock);
 		schedule_delayed_work(&chip->eoc_work,
@@ -3207,11 +3437,6 @@ static irqreturn_t dcin_valid_irq_handler(int irq, void *data)
 		else
 			handle_stop_ext_chg(chip);
 	} else {
-		if (chip->lockup_lpm_wrkarnd)
-			/* if no external supply call bypass debounce here */
-			pm8921_chg_bypass_bat_gone_debounce(chip,
-				is_chg_on_bat(chip));
-
 		if (dc_present)
 			schedule_delayed_work(&chip->unplug_check_work,
 				msecs_to_jiffies(UNPLUG_CHECK_WAIT_PERIOD_MS));
@@ -3263,6 +3488,9 @@ static int __pm_batt_external_power_changed_work(struct device *dev, void *data)
 
 static void pm_batt_external_power_changed(struct power_supply *psy)
 {
+	if (!the_chip)
+		return;
+
 	/* Only look for an external supply if it hasn't been registered */
 	if (!the_chip->ext_psy)
 		class_for_each_device(power_supply_class, NULL, psy,
@@ -3291,6 +3519,15 @@ static void update_heartbeat(struct work_struct *work)
 			      round_jiffies_relative(msecs_to_jiffies
 						     (chip->update_time)));
 }
+#ifdef CONFIG_HUAWEI_KERNEL
+static void unlock_led_wake_lock(struct work_struct *work)
+{
+	struct delayed_work *dwork = to_delayed_work(work);
+	struct pm8921_chg_chip *chip = container_of(dwork,struct pm8921_chg_chip, led_work);
+	/* release led_wake_lock*/
+	wake_unlock(&chip->led_wake_lock);
+}
+#endif
 #define VDD_LOOP_ACTIVE_BIT	BIT(3)
 #define VDD_MAX_INCREASE_MV	400
 static int vdd_max_increase_mv = VDD_MAX_INCREASE_MV;
@@ -3352,6 +3589,7 @@ static void adjust_vdd_max_for_fastchg(struct pm8921_chg_chip *chip,
 	pm_chg_vddmax_set(chip, adj_vdd_max_mv);
 }
 
+/* modify for 1.7232 baseline upgrade */
 static void set_appropriate_vbatdet(struct pm8921_chg_chip *chip)
 {
 	if (chip->is_bat_cool)
@@ -3385,20 +3623,9 @@ static void set_appropriate_battery_current(struct pm8921_chg_chip *chip)
 	pm_chg_ibatmax_set(the_chip, chg_current);
 }
 
-#define TEMP_HYSTERISIS_DECIDEGC 20
-static void battery_cool(bool enter)
-{
-	pr_debug("enter = %d\n", enter);
-	if (enter == the_chip->is_bat_cool)
-		return;
-	the_chip->is_bat_cool = enter;
-	if (enter)
-		pm_chg_vddmax_set(the_chip, the_chip->cool_bat_voltage);
-	else
-		pm_chg_vddmax_set(the_chip, the_chip->max_voltage_mv);
-	set_appropriate_battery_current(the_chip);
-	set_appropriate_vbatdet(the_chip);
-}
+#ifdef CONFIG_HUAWEI_KERNEL
+
+#define TEMP_HYSTERISIS_DECIDEGC 20 // 2  centigrade degree
 
 static void battery_warm(bool enter)
 {
@@ -3415,6 +3642,124 @@ static void battery_warm(bool enter)
 	set_appropriate_vbatdet(the_chip);
 }
 
+static void battery_hot(bool enter)
+{
+	pr_debug("enter = %d\n", enter);
+	if (enter == the_chip->is_bat_hot)
+		return;
+	pr_info("battery become %s now\n",enter?"hot":"normal");
+	the_chip->is_bat_hot = enter;
+	the_chip->is_bat_warm = true;
+	if (enter)
+	{
+		force_ps_but_not_chg_temp = true;
+		pm8921_charger_enable(!force_ps_but_not_chg_temp);
+	}
+	else
+	{
+		battery_warm(true);
+		force_ps_but_not_chg_temp = false;
+		pm8921_charger_enable(!force_ps_but_not_chg_temp);
+	}
+}
+
+static void battery_cold(bool enter)
+{
+	pr_debug("enter = %d\n", enter);
+	if (enter == the_chip->is_bat_cold)
+		return;
+	pr_info("battery become %s now\n",enter?"cold":"normal");
+	the_chip->is_bat_cold= enter;
+	the_chip->is_bat_cool = enter;
+	if (enter)
+	{
+		force_ps_but_not_chg_temp = true;
+		pm8921_charger_enable(!force_ps_but_not_chg_temp);
+	}
+	else
+	{
+		battery_warm(false);
+		force_ps_but_not_chg_temp = false;
+		pm8921_charger_enable(!force_ps_but_not_chg_temp);
+	}
+}
+
+/* to take the maximum temperature of ntc and mpp5 */
+static void check_temp_thresholds(struct pm8921_chg_chip *chip)
+{
+	int temp = 0;
+	int mpp5_temp =0;
+
+	/* TODO: need to check reutrn value */
+	get_prop_batt_temp(chip, &temp);
+	mpp5_temp = get_prop_mpp5_temp(chip);
+	pr_debug("temp = %d, warm_thr_temp = %d, cool_thr_temp = %d, mpp5_temp = %d\n",
+			temp, chip->warm_temp_dc,
+			chip->cool_temp_dc,mpp5_temp);
+	mpp5_temp = TEN_TIMES * (mpp5_temp - MPP5_STANDARD_OFFSET);
+	/*not all project using mpp5 temperature to limit the charging current*/
+	/*so add mpp5_chg_lmt to define if the project need this feature*/
+	if((temp > 0) && chip->mpp5_chg_lmt)
+	{
+		temp = (temp > mpp5_temp) ? temp : mpp5_temp;
+	}
+	if (temp >= chip->hot_temp_dc)
+	{
+		if(!chip->is_bat_hot)
+		{
+			battery_hot(true);
+		}
+		return;
+	}
+
+	if (temp <= chip->cold_temp_dc)
+	{
+		if(!chip->is_bat_cold)
+		{
+			battery_cold(true);
+		}
+		return;
+	}
+
+	if((chip->is_bat_hot)
+		&&(temp < chip->hot_temp_dc - TEMP_HYSTERISIS_DECIDEGC))
+	{
+		battery_hot(false);
+		return;
+	}
+
+	if((chip->is_bat_cold)
+		&&(temp > chip->cold_temp_dc + TEMP_HYSTERISIS_DECIDEGC))
+	{
+		battery_cold(false);
+		return;
+	}
+		
+	if (chip->is_bat_warm
+		&& temp < chip->warm_temp_dc - TEMP_HYSTERISIS_DECIDEGC)
+	{
+		battery_warm(false);
+	}
+	else if (!chip->is_bat_warm && temp >= chip->warm_temp_dc)
+	{
+		battery_warm(true);
+	}
+}
+#else
+#define TEMP_HYSTERISIS_DECIDEGC 20
+static void battery_cool(bool enter)
+{
+	pr_debug("enter = %d\n", enter);
+	if (enter == the_chip->is_bat_cool)
+		return;
+	the_chip->is_bat_cool = enter;
+	if (enter)
+		pm_chg_vddmax_set(the_chip, the_chip->cool_bat_voltage);
+	else
+		pm_chg_vddmax_set(the_chip, the_chip->max_voltage_mv);
+	set_appropriate_battery_current(the_chip);
+	set_appropriate_vbatdet(the_chip);
+}
 static void check_temp_thresholds(struct pm8921_chg_chip *chip)
 {
 	int temp = 0, rc;
@@ -3440,6 +3785,7 @@ static void check_temp_thresholds(struct pm8921_chg_chip *chip)
 			battery_cool(true);
 	}
 }
+#endif
 
 enum {
 	CHG_IN_PROGRESS,
@@ -3731,7 +4077,15 @@ static void eoc_worker(struct work_struct *work)
 
 	if (end == CHG_NOT_IN_PROGRESS) {
 		count = 0;
+#ifdef CONFIG_HUAWEI_KERNEL
+		if(!is_usb_chg_plugged_in(chip))
+		{
+			goto eoc_worker_stop;
+		}
+#else
 		goto eoc_worker_stop;
+#endif
+
 	}
 
 	if (end == CHG_FINISHED) {
@@ -3745,6 +4099,10 @@ static void eoc_worker(struct work_struct *work)
 		pr_info("End of Charging\n");
 
 		pm_chg_auto_enable(chip, 0);
+
+#ifdef CONFIG_HUAWEI_KERNEL
+		force_ps_but_not_chg_temp = false;
+#endif
 
 		if (is_ext_charging(chip))
 			chip->ext_charge_done = true;
@@ -3865,11 +4223,29 @@ static int set_usb_max_current(const char *val, struct kernel_param *kp)
 		pr_err("error setting value %d\n", ret);
 		return ret;
 	}
+	/* if ma < usb_max_current and power_supply type is usb_dcp or usb_cdp,reset the usb_max_current */
 	if (chip) {
+#ifdef CONFIG_HUAWEI_KERNEL
+		if(0 == usb_max_current)
+		{
+			pr_err("not set max_current to 0!\n");
+			return 0;
+		}
+#endif
 		pr_warn("setting current max to %d\n", usb_max_current);
 		pm_chg_iusbmax_get(chip, &mA);
 		if (mA > usb_max_current)
+		{
 			pm8921_charger_vbus_draw(usb_max_current);
+		}
+		else if(mA < usb_max_current && 0!=usb_max_current)
+		{
+			if(POWER_SUPPLY_TYPE_USB_DCP == the_chip->usb_type 
+			|| POWER_SUPPLY_TYPE_USB_CDP == the_chip->usb_type )
+			{
+				pm8921_charger_vbus_draw(usb_max_current);
+			}
+		}
 		return 0;
 	}
 	return -EINVAL;
@@ -3877,6 +4253,50 @@ static int set_usb_max_current(const char *val, struct kernel_param *kp)
 module_param_call(usb_max_current, set_usb_max_current,
 	param_get_uint, &usb_max_current, 0644);
 
+#ifdef CONFIG_HUAWEI_KERNEL
+static int enable_call_limit(const char *val, struct kernel_param *kp)
+{
+	int ret, mA;
+	struct pm8921_chg_chip *chip = the_chip;
+
+	ret = param_set_int(val, kp);
+	if (ret) {
+		pr_err("error setting value %d\n", ret);
+		return ret;
+	}
+
+	if (chip) {
+		call_limit_flag = !!call_limit_flag;
+		pr_info("call_limit_flag is set to %d\n",call_limit_flag);
+
+		if(call_limit_flag)
+		{
+			pm_chg_iusbmax_get(chip, &mA);
+			if (mA > call_limit_current)
+			{
+				pm8921_charger_vbus_draw(call_limit_current);
+			}
+		}
+		else
+		{
+			if(POWER_SUPPLY_TYPE_USB_DCP == the_chip->usb_type 
+			|| POWER_SUPPLY_TYPE_USB_CDP == the_chip->usb_type )
+			{
+				pm8921_charger_vbus_draw(1500);
+			}
+			else
+			{
+				pm8921_charger_vbus_draw(500);
+			}
+		}
+
+		return 0;
+	}
+	return -EINVAL;
+}
+module_param_call(call_limit_flag, enable_call_limit,
+	param_get_uint, &call_limit_flag, 0644);
+#endif
 static void free_irqs(struct pm8921_chg_chip *chip)
 {
 	int i;
@@ -3903,6 +4323,12 @@ static void __devinit determine_initial_state(struct pm8921_chg_chip *chip)
 		schedule_delayed_work(&chip->unplug_check_work,
 			msecs_to_jiffies(UNPLUG_CHECK_WAIT_PERIOD_MS));
 		pm8921_chg_enable_irq(chip, CHG_GONE_IRQ);
+#ifdef CONFIG_INPUT_HW_ATE
+		if(ate_notifier_call != NULL)
+		{
+			(*ate_notifier_call)(chip->usb_present);
+		}
+#endif
 	}
 
 	pm8921_chg_enable_irq(chip, DCIN_VALID_IRQ);
@@ -4045,6 +4471,91 @@ err_out:
 	return -EINVAL;
 }
 
+static void pm8921_chg_force_19p2mhz_clk(struct pm8921_chg_chip *chip)
+{
+	int err;
+	u8 temp;
+
+	temp  = 0xD1;
+	err = pm_chg_write(chip, CHG_TEST, temp);
+	if (err) {
+		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
+		return;
+	}
+
+	temp  = 0xD3;
+	err = pm_chg_write(chip, CHG_TEST, temp);
+	if (err) {
+		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
+		return;
+	}
+
+	temp  = 0xD1;
+	err = pm_chg_write(chip, CHG_TEST, temp);
+	if (err) {
+		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
+		return;
+	}
+
+	temp  = 0xD5;
+	err = pm_chg_write(chip, CHG_TEST, temp);
+	if (err) {
+		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
+		return;
+	}
+
+	udelay(183);
+
+	temp  = 0xD1;
+	err = pm_chg_write(chip, CHG_TEST, temp);
+	if (err) {
+		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
+		return;
+	}
+
+	temp  = 0xD0;
+	err = pm_chg_write(chip, CHG_TEST, temp);
+	if (err) {
+		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
+		return;
+	}
+	udelay(32);
+
+	temp  = 0xD1;
+	err = pm_chg_write(chip, CHG_TEST, temp);
+	if (err) {
+		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
+		return;
+	}
+
+	temp  = 0xD3;
+	err = pm_chg_write(chip, CHG_TEST, temp);
+	if (err) {
+		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
+		return;
+	}
+}
+
+static void pm8921_chg_set_hw_clk_switching(struct pm8921_chg_chip *chip)
+{
+	int err;
+	u8 temp;
+
+	temp  = 0xD1;
+	err = pm_chg_write(chip, CHG_TEST, temp);
+	if (err) {
+		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
+		return;
+	}
+
+	temp  = 0xD0;
+	err = pm_chg_write(chip, CHG_TEST, temp);
+	if (err) {
+		pr_err("Error %d writing %d to addr %d\n", err, temp, CHG_TEST);
+		return;
+	}
+}
+
 #define VREF_BATT_THERM_FORCE_ON	BIT(7)
 static void detect_battery_removal(struct pm8921_chg_chip *chip)
 {
@@ -4076,15 +4587,8 @@ static int __devinit pm8921_chg_hw_init(struct pm8921_chg_chip *chip)
 	u8 subrev;
 	int rc, vdd_safe, fcc_uah, safety_time = DEFAULT_SAFETY_MINUTES;
 
-	spin_lock_init(&lpm_lock);
-
-	if (pm8xxx_get_version(chip->dev->parent) == PM8XXX_VERSION_8921) {
-		rc = __pm8921_apply_19p2mhz_kickstart(chip);
-		if (rc) {
-			pr_err("Failed to apply kickstart rc=%d\n", rc);
-			return rc;
-		}
-	}
+	/* forcing 19p2mhz before accessing any charger registers */
+	pm8921_chg_force_19p2mhz_clk(chip);
 
 	detect_battery_removal(chip);
 
@@ -4330,45 +4834,6 @@ static int __devinit pm8921_chg_hw_init(struct pm8921_chg_chip *chip)
 	if (rc) {
 		pr_err("Failed to enable charging rc=%d\n", rc);
 		return rc;
-	}
-
-	if (pm8xxx_get_version(chip->dev->parent) == PM8XXX_VERSION_8921) {
-		/* Clear kickstart */
-		rc = pm8xxx_writeb(chip->dev->parent, CHG_TEST, 0xD0);
-		if (rc) {
-			pr_err("Failed to clear kickstart rc=%d\n", rc);
-			return rc;
-		}
-
-		/* From here the lpm_workaround will be active */
-		chip->lockup_lpm_wrkarnd = true;
-
-		/* Enable LPM */
-		pm8921_chg_set_lpm(chip, 1);
-	}
-
-	if (chip->lockup_lpm_wrkarnd) {
-		chip->vreg_xoadc = regulator_get(chip->dev, "vreg_xoadc");
-		if (IS_ERR(chip->vreg_xoadc))
-			return -ENODEV;
-
-		rc = regulator_set_optimum_mode(chip->vreg_xoadc, 10000);
-		if (rc < 0) {
-			pr_err("Failed to set configure HPM rc=%d\n", rc);
-			return rc;
-		}
-
-		rc = regulator_set_voltage(chip->vreg_xoadc, 1800000, 1800000);
-		if (rc) {
-			pr_err("Failed to set L14 voltage rc=%d\n", rc);
-			return rc;
-		}
-
-		rc = regulator_enable(chip->vreg_xoadc);
-		if (rc) {
-			pr_err("Failed to enable L14 rc=%d\n", rc);
-			return rc;
-		}
 	}
 
 	return 0;
@@ -4621,19 +5086,16 @@ static int pm8921_charger_suspend_noirq(struct device *dev)
 	int rc;
 	struct pm8921_chg_chip *chip = dev_get_drvdata(dev);
 
-	if (chip->lockup_lpm_wrkarnd) {
-		rc = regulator_disable(chip->vreg_xoadc);
-		if (rc)
-			pr_err("Failed to disable L14 rc=%d\n", rc);
-
-		rc = pm8921_apply_19p2mhz_kickstart(chip);
-		if (rc)
-			pr_err("Failed to apply kickstart rc=%d\n", rc);
-	}
-
 	rc = pm_chg_masked_write(chip, CHG_CNTRL, VREF_BATT_THERM_FORCE_ON, 0);
 	if (rc)
 		pr_err("Failed to Force Vref therm off rc=%d\n", rc);
+
+	rc = pm8921_chg_set_lpm(chip, 1);
+	if (rc)
+		pr_err("Failed to set lpm rc=%d\n", rc);
+
+	pm8921_chg_set_hw_clk_switching(chip);
+
 	return 0;
 }
 
@@ -4642,15 +5104,11 @@ static int pm8921_charger_resume_noirq(struct device *dev)
 	int rc;
 	struct pm8921_chg_chip *chip = dev_get_drvdata(dev);
 
-	if (chip->lockup_lpm_wrkarnd) {
-		rc = regulator_enable(chip->vreg_xoadc);
-		if (rc)
-			pr_err("Failed to enable L14 rc=%d\n", rc);
+	pm8921_chg_force_19p2mhz_clk(chip);
 
-		rc = pm8921_apply_19p2mhz_kickstart(chip);
-		if (rc)
-			pr_err("Failed to apply kickstart rc=%d\n", rc);
-	}
+	rc = pm8921_chg_set_lpm(chip, 0);
+	if (rc)
+		pr_err("Failed to set lpm rc=%d\n", rc);
 
 	rc = pm_chg_masked_write(chip, CHG_CNTRL, VREF_BATT_THERM_FORCE_ON,
 						VREF_BATT_THERM_FORCE_ON);
@@ -4678,6 +5136,7 @@ static int pm8921_charger_resume(struct device *dev)
 static int pm8921_charger_suspend(struct device *dev)
 {
 	struct pm8921_chg_chip *chip = dev_get_drvdata(dev);
+	int rc = 0;
 
 	if (chip->btc_override)
 		cancel_delayed_work_sync(&chip->btc_override_work);
@@ -4686,12 +5145,358 @@ static int pm8921_charger_suspend(struct device *dev)
 		pm8921_chg_enable_irq(chip, LOOP_CHANGE_IRQ);
 		enable_irq_wake(chip->pmic_chg_irq[LOOP_CHANGE_IRQ]);
 	}
-
+#ifdef CONFIG_HUAWEI_KERNEL
+	rc = pm8xxx_batt_alarm_enable(PM8XXX_BATT_ALARM_LOWER_COMPARATOR);
+	if (rc < 0)
+		pr_err("Failed to enable lower comparator\n");
+#endif
+	
 	return 0;
 }
+/* change char tpye to int type and count sum of num */
+static int atoi(const char *name)
+{
+    int val = 0;
+    for (;; name++)
+    {
+        switch (*name)
+        {
+            case '0' ... '9':
+                val = 10*val+(*name-'0');
+                break;
+            default:
+                return val;
+        }
+    }
+}
+
+/** diag task set /sys/bus/platform/drivers/pm8921-charger/diag
+*if set 1 enable charge
+*if set 0 disabled charge
+*/
+static ssize_t pm8921_charger_attr_store(struct device_driver *driver,const char *buf, size_t count)
+{
+    int value=0;
+    if(NULL == buf)
+    {
+        printk("parameter is null");
+        return 0;
+    }
+    value = atoi(buf);
+    printk("pm8921_charger_attr_store: Write Value=%d\n",value);
+
+#ifdef CONFIG_HUAWEI_KERNEL
+	force_ps_but_not_chg = !(value);
+#endif
+
+    pm8921_charger_enable((value==0)?false:true);
+
+#ifdef CONFIG_HUAWEI_KERNEL
+    power_supply_changed(&the_chip->dc_psy);
+    power_supply_changed(&the_chip->usb_psy);
+    power_supply_changed(&the_chip->batt_psy);
+#endif
+    return count;
+}
+
+/* support read charge state function */
+static ssize_t pm8921_charger_attr_show(struct device_driver *driver, char *buf)
+{
+    int iRet=0;
+    bool bRes = true;
+    char* pOut[]={"Error","Chariging Enabled","Chariging Disabled"};
+
+    if(NULL == buf)
+    {
+        printk("parameter is null");
+        return 0;
+    }
+    bRes = pm8921_is_battery_charging(&iRet);
+    /* 1: Chariging Enabled;2:Chariging Disabled*/
+    if(true == bRes)
+    {
+        iRet = 1;
+    }
+    else
+    {
+        iRet = 2;
+    }
+    
+    return sprintf(buf, "%s", pOut[iRet]);
+}
+
+/* register read and write function for diag */
+static DRIVER_ATTR(diag, S_IRUGO|S_IWUGO, pm8921_charger_attr_show, pm8921_charger_attr_store);
+static ssize_t pm8921_charger_Qgaugelog(struct device_driver *driver, char *buf)
+{
+    int temp = 0, voltage = 0, cur = 0, capacity = 0, fcc = 0, health = 0, type = 0, status = 0;
+    
+    if((NULL == the_chip)||(NULL == buf))
+    {
+        printk("parameter is null");
+        return 0;
+    }
+    else
+    {
+        voltage = get_prop_battery_uvolts(the_chip); /* battery voltage */
+        capacity = get_prop_batt_capacity(the_chip); /* battery capacity */
+        /* TODO: need to check reutrn value */
+        get_prop_batt_current(the_chip, &cur);/* battery current  */
+        get_prop_batt_temp(the_chip, &temp);/* battery temperature */
+        fcc = get_prop_batt_fcc(the_chip);/* battery fcc */
+        health = get_prop_batt_health(the_chip);/* battery is ok? */
+        type = get_prop_charge_type(the_chip);/* battery charge tpye */
+        status = get_prop_batt_status(the_chip);/* battery charge state */
+        sprintf(buf, "%-9d  %-9d  %-4d  %-6d  %-6d   %-6d  %-6d  %-6d    ",                                
+                    voltage/1000,  (signed short)(cur/1000), capacity, temp/10, fcc/1000, health, type, status);
+        return strlen(buf);
+    }
+}
+    /* register file system driver mode for charging log */
+static DRIVER_ATTR(Qgaugelog, S_IRUGO, pm8921_charger_Qgaugelog,NULL);
+
+#ifdef CONFIG_HUAWEI_KERNEL
+#define RCONN_WAITING_TIME_MS 1000
+static ssize_t pm8921_rconn_attr_store(struct device_driver *driver,const char *buf, size_t count)
+{
+	int value=0;
+	int ibat_ua = 0, vbat_uv = 0;
+
+	if(NULL == buf)
+	{
+		printk("parameter is null");
+		return 0;
+	}
+	
+	value = atoi(buf);
+	printk("pm8921_rconn_attr_store: Write Value=%d\n",value);
+
+	do	
+	{
+		/*current = 0*/
+		force_ps_but_not_chg = true;
+		pm8921_charger_enable(!force_ps_but_not_chg);
+		msleep(RCONN_WAITING_TIME_MS);
+		pm8921_bms_get_simultaneous_battery_voltage_and_current(&ibat_ua,&vbat_uv);
+		printk("rconn current = 0, V= %d,C= %d\n",vbat_uv,ibat_ua);
+		/*discharging*/
+		charging_disabled = 1;
+		pm_chg_charge_dis(the_chip, charging_disabled);
+		msleep(RCONN_WAITING_TIME_MS);
+		pm8921_bms_get_simultaneous_battery_voltage_and_current(&ibat_ua,&vbat_uv);
+		printk("rconn discharging, V= %d,C= %d\n",vbat_uv,ibat_ua);
+		/*charging*/
+		force_ps_but_not_chg = false;
+		pm_chg_auto_enable(the_chip, !force_ps_but_not_chg);
+		pm_chg_charge_dis(the_chip, force_ps_but_not_chg);		
+		msleep(RCONN_WAITING_TIME_MS);
+		pm8921_bms_get_simultaneous_battery_voltage_and_current(&ibat_ua,&vbat_uv);
+		printk("rconn charging   , V= %d,C= %d\n",vbat_uv,ibat_ua);
+
+		value --;
+	}while(value > 0 );
+
+	return count;
+}
+static DRIVER_ATTR(rconn, S_IWUSR, NULL, pm8921_rconn_attr_store);
+#endif
+
+#ifdef CONFIG_HUAWEI_KERNEL
+static int get_charge_std_data (char *charge_std,struct pm8921_charge_std_data **charge_std_data)
+{
+	int tablesize = 0;
+	int i = 0;
+	tablesize = ARRAY_SIZE(charge_std_map);
+
+	while (i < tablesize) 
+	{
+		if ( !(strcmp(charge_std_map[i].charge_std,charge_std))) 
+		{
+			*charge_std_data = charge_std_map[i].charge_std_data;
+			return 0;
+		} 
+		else 
+		{
+			i++;
+		}
+	}
+	return ERR;
+}
+
+/*============================================================================================
+FUNCTION        set_charge_data
+
+DESCRIPTION    This function is called for set charge data
+
+INPUT: struct pm8921_chg_chip *chip
+OUTPUT: struct pm8921_chg_chip *chip
+RETURN VALUE:    none
+
+DEPENDENCIES : none
+
+SIDE EFFECTS : none
+
+=============================================================================================*/
+/* modify for 1.7232 baseline upgrade */
+static void set_charge_data(struct pm8921_chg_chip *chip)
+{
+    int max_battery_voltage_mv = ERR;
+    struct pm8921_charger_platform_data *charger_individual_data= NULL;
+    int count = 0;
+    char charge_std[MAX_CHARE_STD_LENGTH] = {0};	
+    struct pm8921_charge_std_data *charge_standard_data = &pm8921_charge_others_data;
+    int batt_fcc = ERR;
+
+    do
+    {
+        max_battery_voltage_mv = get_batt_max_voltage_mv();
+        if(max_battery_voltage_mv > 0)
+        {
+            break;
+        }
+        msleep(MAX_BATTERY_VOLTAGE_SLEEP_TIMER_MS);
+        count ++;
+    }while (count < MAX_COUNT);
+
+    if((max_battery_voltage_mv < 0)||(MAX_BATTERY_VOLTAGE_4200MV == max_battery_voltage_mv))
+    {
+        charger_individual_data = &pm8921_charger_max_mv_4200_data;
+    }
+    else
+    {
+        charger_individual_data = &pm8921_charger_max_mv_4350_data;
+    }
+
+    do
+    {
+        batt_fcc = get_batt_fcc();
+        if(batt_fcc > 0)
+        {
+            break;
+        }
+        msleep(MAX_BATTERY_VOLTAGE_SLEEP_TIMER_MS);
+        count ++;
+    }while (count < MAX_COUNT);
+
+
+    if ( get_charge_standard(charge_std, MAX_CHARE_STD_LENGTH) < 0)
+    {
+        pr_err("get charge std error\n");
+    }
+    else
+    {
+        pr_debug("charge std: %s \n",charge_std);
+    }
+
+    if (get_charge_std_data(charge_std,&charge_standard_data) < 0)
+    {
+        pr_err("get charge_standard_data error\n");
+    }     
+    /* 500ma is default current as call_limit_current */
+    call_limit_current = 500;
+    call_limit_flag = 0;
+    chip->update_time = charger_individual_data->update_time;
+    chip->max_voltage_mv = charger_individual_data->max_voltage;
+    chip->min_voltage_mv = charger_individual_data->min_voltage;
+    chip->resume_voltage_delta = charger_individual_data->resume_voltage_delta;
+    chip->term_current = charger_individual_data->term_current;
+    if (charge_standard_data->cool_temp != INT_MIN)
+    {   
+        chip->cool_temp_dc = charge_standard_data->cool_temp * TEMPERATURE_DC_PER_C;
+        pr_debug("cool_temp %d\n", chip->cool_temp_dc);
+    }
+    else
+    {   
+        chip->cool_temp_dc = INT_MIN;
+    }
+
+    if (charge_standard_data->warm_temp != INT_MIN)
+    {
+        chip->warm_temp_dc = charge_standard_data->warm_temp * TEMPERATURE_DC_PER_C;
+        pr_debug("warm_temp %d\n", chip->warm_temp_dc);
+
+    }
+    else
+    {
+        chip->warm_temp_dc = INT_MIN;
+    }
+
+    if (charge_standard_data->cold_temp != INT_MIN)
+    {   
+        chip->cold_temp_dc = charge_standard_data->cold_temp * TEMPERATURE_DC_PER_C;
+        pr_debug("cold_temp %d\n", chip->cold_temp_dc);
+    }
+    else
+    {   
+        chip->cold_temp_dc = INT_MIN;
+    }
+
+    if (charge_standard_data->hot_temp != INT_MIN)
+    {
+        chip->hot_temp_dc = charge_standard_data->hot_temp * TEMPERATURE_DC_PER_C;
+        pr_debug("hot_temp %d\n", chip->hot_temp_dc);
+    }
+    else
+    {
+        chip->hot_temp_dc = INT_MIN;
+    }
+
+    chip->temp_check_period = charger_individual_data->temp_check_period;
+    chip->max_bat_chg_current = charger_individual_data->max_bat_chg_current;
+    chip->warm_bat_voltage = charger_individual_data->warm_bat_voltage;
+    if( (batt_fcc < 0) ||(0 == charge_standard_data->fcc_div_warm_chg_curr))
+    {
+        chip->warm_bat_chg_current = charger_individual_data->warm_bat_chg_current;
+    }
+    else
+    {
+        chip->warm_bat_chg_current = batt_fcc/(charge_standard_data->fcc_div_warm_chg_curr) - 50;
+        if(chip->warm_bat_chg_current > MAX_WARM_BAT_CHG_CURRENT)
+        {
+            chip->warm_bat_chg_current = MAX_WARM_BAT_CHG_CURRENT;
+        }
+    }
+    pr_debug("warm_bat_chg_current %d\n", chip->warm_bat_chg_current);
+
+    chip->cold_thr = charger_individual_data->cold_thr;
+    chip->hot_thr = charger_individual_data->hot_thr;
+    chip->mpp5_chg_lmt = get_mpp5_charge_limit();
+}
+/*============================================================================================
+FUNCTION        set_debug_param
+
+DESCRIPTION     Internal function to enable or disable log function.
+
+INPUT: 
+OUTPUT: 
+RETURN VALUE:    
+                    success: 0
+DEPENDENCIES : none
+
+SIDE EFFECTS : none
+
+=============================================================================================*/
+static int set_debug_param(const char *val, struct kernel_param *kp)
+{
+	int ret;
+
+	ret = param_set_int(val, kp);
+	if (ret) 
+	{
+		pr_err("error setting value %d\n", ret);
+		return ret;
+	}
+	pr_info("set debug param to %d\n", debug_enabled);
+	return 0;
+}
+module_param_call(debug_enable, set_debug_param, param_get_uint,
+					&debug_enabled, 0644);
+#endif
+
 static int __devinit pm8921_charger_probe(struct platform_device *pdev)
 {
 	int rc = 0;
+    int retval = 0;
 	struct pm8921_chg_chip *chip;
 	const struct pm8921_charger_platform_data *pdata
 				= pdev->dev.platform_data;
@@ -4712,7 +5517,11 @@ static int __devinit pm8921_charger_probe(struct platform_device *pdev)
 	chip->ttrkl_time = pdata->ttrkl_time;
 	chip->update_time = pdata->update_time;
 	chip->max_voltage_mv = pdata->max_voltage;
+#ifdef CONFIG_HUAWEI_KERNEL
+	chip->alarm_low_mv =  get_cutoff_v_mv();
+#else
 	chip->alarm_low_mv = pdata->alarm_low_mv;
+#endif
 	chip->alarm_high_mv = pdata->alarm_high_mv;
 	chip->min_voltage_mv = pdata->min_voltage;
 	chip->safe_current_ma = pdata->safe_current_ma;
@@ -4770,6 +5579,14 @@ static int __devinit pm8921_charger_probe(struct platform_device *pdev)
 
 	if (chip->battery_less_hardware)
 		charging_disabled = 1;
+#ifdef CONFIG_HUAWEI_KERNEL
+	chip->poweroff_delay_work_flag = false;
+#endif
+
+#ifdef CONFIG_HUAWEI_KERNEL
+	set_charge_data(chip);
+#endif
+
 
 	chip->ibatmax_max_adj_ma = find_ibat_max_adj_ma(
 					chip->max_bat_chg_current);
@@ -4784,6 +5601,7 @@ static int __devinit pm8921_charger_probe(struct platform_device *pdev)
 		pm8921_chg_btc_override_init(chip);
 
 	chip->stop_chg_upon_expiry = pdata->stop_chg_upon_expiry;
+	chip->usb_type = POWER_SUPPLY_TYPE_UNKNOWN;
 
 	chip->usb_psy.name = "usb",
 	chip->usb_psy.type = POWER_SUPPLY_TYPE_USB,
@@ -4829,10 +5647,11 @@ static int __devinit pm8921_charger_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, chip);
 	the_chip = chip;
 
-	/* set initial state of the USB charger type to UNKNOWN */
-	power_supply_set_supply_type(&chip->usb_psy, POWER_SUPPLY_TYPE_UNKNOWN);
-
 	wake_lock_init(&chip->eoc_wake_lock, WAKE_LOCK_SUSPEND, "pm8921_eoc");
+#ifdef CONFIG_HUAWEI_KERNEL
+	wake_lock_init(&chip->led_wake_lock, WAKE_LOCK_SUSPEND, "pm8921_led");
+	INIT_DELAYED_WORK(&chip->led_work, unlock_led_wake_lock);
+#endif
 	INIT_DELAYED_WORK(&chip->eoc_work, eoc_worker);
 	INIT_DELAYED_WORK(&chip->vin_collapse_check_work,
 						vin_collapse_check_worker);
@@ -4843,6 +5662,11 @@ static int __devinit pm8921_charger_probe(struct platform_device *pdev)
 
 	INIT_DELAYED_WORK(&chip->update_heartbeat_work, update_heartbeat);
 	INIT_DELAYED_WORK(&chip->btc_override_work, btc_override_worker);
+
+#ifdef CONFIG_HUAWEI_KERNEL
+	INIT_DELAYED_WORK(&chip->poweroff_delay_work, poweroff_delay);
+	wake_lock_init(&chip->poweroff_wake_lock, WAKE_LOCK_SUSPEND, "pm8921_poweroff");
+#endif
 
 	rc = request_irqs(chip, pdev);
 	if (rc) {
@@ -4856,6 +5680,27 @@ static int __devinit pm8921_charger_probe(struct platform_device *pdev)
 	enable_irq_wake(chip->pmic_chg_irq[FASTCHG_IRQ]);
 
 	create_debugfs_entries(chip);
+    /* creat sysfs /sys/bus/platform/drivers/pm8921-charger/diag */
+    retval = driver_create_file(&(pm8921_charger_driver.driver), &driver_attr_diag);
+    if (0 != retval)
+    {
+        printk("failed to create sysfs entry(for diag ): %d\n", retval);
+    }
+    /* creat file node /sys/bus/platform/drivers/pm8921-charger/Qgaugelog */
+    retval = driver_create_file(&(pm8921_charger_driver.driver), &driver_attr_Qgaugelog);
+    if (0 != retval)
+    {
+        printk("failed to create sysfs entry(gaugelog): %d\n", retval);
+    }
+
+#ifdef CONFIG_HUAWEI_KERNEL
+    /* creat file node /sys/bus/platform/drivers/pm8921-charger/rconn */
+    retval = driver_create_file(&(pm8921_charger_driver.driver), &driver_attr_rconn);
+    if (0 != retval)
+    {
+        printk("failed to create sysfs entry(rconn): %d\n", retval);
+    }
+#endif
 
 	/* determine what state the charger is in */
 	determine_initial_state(chip);
@@ -4882,7 +5727,6 @@ static int __devexit pm8921_charger_remove(struct platform_device *pdev)
 {
 	struct pm8921_chg_chip *chip = platform_get_drvdata(pdev);
 
-	regulator_put(chip->vreg_xoadc);
 	free_irqs(chip);
 	platform_set_drvdata(pdev, NULL);
 	the_chip = NULL;

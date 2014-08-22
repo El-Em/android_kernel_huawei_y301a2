@@ -365,6 +365,25 @@ config ARCH_MSM9625
 	select GPIO_MSM_V3
 endmenu
 
+config HUAWEI_KERNEL
+	bool "HUAWEI Product"
+	depends on ARCH_MSM8930
+
+config HUAWEI_KERNEL_DEBUG
+	bool "HUAWEI kernel debug"
+	depends on HUAWEI_KERNEL
+	default n
+	help
+
+config HUAWEI_REGULATOR_VOLTAGE_SET
+	bool "HUAWEI regulator voltage set"
+	depends on HUAWEI_KERNEL
+	default n
+	help
+	  If allow dynamic regulator voltage set
+	  in root mode,
+	  Say Y.
+
 choice
 	prompt "MSM SoC Revision"
 	default MSM_SOC_REV_NONE

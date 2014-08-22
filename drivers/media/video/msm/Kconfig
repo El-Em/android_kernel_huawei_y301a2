@@ -36,6 +36,53 @@ config IMX074
 	depends on MSM_CAMERA
 	---help---
 	SONY 13.5 MP Bayer Sensor
+config MT9E013
+	bool "Sensor MT9E013 (BAYER 8M)"
+	depends on MSM_CAMERA
+	---help---
+	MICRON 5M Bayer Sensor with AutoFocus
+config GC0313
+	bool "Sensor GC0313 (YUV 0.3M)"
+	depends on MSM_CAMERA
+	default n
+	help
+	if Y ,select HUAWEI_CAMERA_SENSOR_GC0313
+config BF3905
+	bool "Sensor BF3905 (YUV 0.3M)"
+	depends on MSM_CAMERA
+	default n
+	help
+	if Y ,select HUAWEI_CAMERA_SENSOR_BF3905
+config MT9V113
+	bool "Sensor MT9V113 (YUV 0.3M)"
+	depends on MSM_CAMERA
+	---help---
+	MICRON 0.3M YUV Sensor
+config S5K5CA
+	bool "Sensor S5K5CA (YUV 3M)"
+	depends on MSM_CAMERA
+	---help---
+	SAMSUNG 3M YUV Sensor
+config MT9T113
+	bool "Sensor MT9T113 (YUV 3M)"
+	depends on MSM_CAMERA
+	---help---
+	MICRON 3M YUV Sensor
+config IMX188
+	bool "Sensor IMX188 (BAYER 1M)"
+	depends on MSM_CAMERA
+	---help---
+	SONY 1M BAYER Sensor
+config IMX134
+	bool "Sensor IMX134 (BAYER 8M)"
+	depends on MSM_CAMERA
+	---help---
+	SONY 8M BAYER Sensor
+config OV9724
+	bool "Sensor OV9724 (BAYER 1M)"
+	depends on MSM_CAMERA
+	---help---
+	OV 1M BAYER Sensor
 config OV5640
 	bool "Sensor OV5640 (YUV 5M)"
 	depends on MSM_CAMERA && !MSM_CAMERA_V4L2
@@ -227,7 +274,30 @@ config MSM_CAMERA_FLASH
 	default y
 	---help---
 	  Enable support for LED flash for msm camera
-
+config HUAWEI_FEATURE_TPS61310
+	tristate "TPS61310"
+	depends on HUAWEI_KERNEL
+	default n
+	help
+	  tps61310 LED camera flash and video light
+config HUAWEI_FEATURE_LM3642
+	tristate "LM3642"
+	depends on HUAWEI_KERNEL
+	default n
+	help
+	  lm3642 LED camera flash and video light
+config HUAWEI_CAMERA
+	bool "HW CAMERA"
+	depends on MSM_CAMERA
+	default n
+	help
+	  fake camera 
+config HW_TORCH
+	bool "HUAWEI torch support"
+	depends on MSM_CAMERA_FLASH
+	default n
+	---help---
+	  Enable support for LED flash for torch
 config MSM_CAMERA_SENSOR
 	bool "Qualcomm MSM camera sensor support"
 	depends on MSM_CAMERA
@@ -407,3 +477,8 @@ config OV7692
 	depends on MSM_CAMERA
 	---help---
 	  Omni Vision VGA YUV Sensor
+config S5K9A1
+	bool "Sensor S5K9A1 (1M bayer)"
+	depends on MSM_CAMERA
+	---help---
+	  SAMSUNG 1M Bayer Sensor

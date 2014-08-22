@@ -24,10 +24,10 @@
 #include <mach/socinfo.h>
 #include <linux/ion.h>
 #include <mach/ion.h>
-
+#include <hsad/config_interface.h>
 #include "devices.h"
 #include "board-8930.h"
-
+#include <mach/pmic.h>
 #ifdef CONFIG_FB_MSM_TRIPLE_BUFFER
 #define MSM_FB_PRIM_BUF_SIZE \
 		(roundup((1920 * 1088 * 4), 4096) * 3) /* 4 bpp x 3 pages */
@@ -77,6 +77,9 @@ static struct resource msm_fb_resources[] = {
 
 static int msm_fb_detect_panel(const char *name)
 {
+	/*	prevent other LCD drivers loading*/
+	return -ENODEV;
+
 	if (!strncmp(name, MIPI_CMD_NOVATEK_QHD_PANEL_NAME,
 			strnlen(MIPI_CMD_NOVATEK_QHD_PANEL_NAME,
 				PANEL_NAME_MAX_LEN)))
@@ -133,6 +136,7 @@ static struct platform_device msm_fb_device = {
 
 static bool dsi_power_on;
 static struct mipi_dsi_panel_platform_data novatek_pdata;
+#ifndef CONFIG_HUAWEI_KERNEL
 static void pm8917_gpio_set_backlight(int bl_level)
 {
 	int gpio24 = PM8917_GPIO_PM_TO_SYS(24);
@@ -141,6 +145,7 @@ static void pm8917_gpio_set_backlight(int bl_level)
 	else
 		gpio_set_value_cansleep(gpio24, 0);
 }
+#endif
 
 /*
  * TODO: When physical 8930/PM8038 hardware becomes
@@ -149,6 +154,7 @@ static void pm8917_gpio_set_backlight(int bl_level)
  */
 #define DISP_RST_GPIO 58
 #define DISP_3D_2D_MODE 1
+#ifndef CONFIG_HUAWEI_KERNEL
 static int mipi_dsi_cdp_panel_power(int on)
 {
 	static struct regulator *reg_l8, *reg_l23, *reg_l2;
@@ -307,6 +313,212 @@ static int mipi_dsi_cdp_panel_power(int on)
 		usleep(20);
 	}
 	return 0;
+}
+#else
+static int mipi_dsi_cdp_panel_power(int on)
+{
+	static struct regulator *reg_l2;
+	int rc;
+	pr_debug("%s: state : %d\n", __func__, on);
+
+	if (!dsi_power_on) {
+
+		
+		reg_l2 = regulator_get(&msm_mipi_dsi1_device.dev,
+				"dsi_vdda");
+		if (IS_ERR(reg_l2)) {
+			pr_err("could not get 8038_l2, rc = %ld\n",
+				PTR_ERR(reg_l2));
+			return -ENODEV;
+		}
+		
+		rc = regulator_set_voltage(reg_l2, 1200000, 1200000);
+		if (rc) {
+			pr_err("set_voltage l2 failed, rc=%d\n", rc);
+			return -EINVAL;
+		}
+		
+		dsi_power_on = true;
+	}
+	if (on) {
+		
+		rc = regulator_set_optimum_mode(reg_l2, 100000);
+		if (rc < 0) {
+			pr_err("set_optimum_mode l2 failed, rc=%d\n", rc);
+			return -EINVAL;
+		}
+		
+		rc = regulator_enable(reg_l2);
+		if (rc) {
+			pr_err("enable l2 failed, rc=%d\n", rc);
+			return -ENODEV;
+		}
+	} else {
+
+		rc = regulator_disable(reg_l2);
+		if (rc) {
+			pr_err("disable reg_l2 failed, rc=%d\n", rc);
+			return -ENODEV;
+		}
+		
+		rc = regulator_set_optimum_mode(reg_l2, 100);
+		if (rc < 0) {
+			pr_err("set_optimum_mode l2 failed, rc=%d\n", rc);
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+#endif
+#define PWM_FREQ_HZ 3921
+#define PWM_PERIOD_USEC (USEC_PER_SEC / PWM_FREQ_HZ)
+#define MIPI_TOSHIBA_PWM_LEVEL 255
+#define PWM_DUTY_LEVEL \
+	(PWM_PERIOD_USEC / MIPI_TOSHIBA_PWM_LEVEL)
+	
+void backlight_control(void)
+{
+	struct pwm_device *bl_pwm;
+	int led_pwm;		/* pm8058 gpio 24, channel 0 */
+	int ret;
+	led_pwm = 0;
+	bl_pwm = pwm_request(led_pwm, "backlight");
+	if (bl_pwm == NULL || IS_ERR(bl_pwm)) {
+		pr_err("%s pwm_request() failed\n", __func__);
+		bl_pwm = NULL;
+	}
+	else
+		{
+		printk("lgsh pwm_request succeed in %s!\n",__func__);
+		}
+
+	if (bl_pwm) {
+		ret = pwm_config(bl_pwm, PWM_DUTY_LEVEL * 100,
+			PWM_PERIOD_USEC);
+		if (ret) {
+			pr_err("%s: pwm_config on pwm failed %d\n",
+					__func__, ret);
+			return;
+		}
+		else
+		{
+		printk("lgsh pwm_config succeed in %s!\n",__func__);
+		}
+
+		ret = pwm_enable(bl_pwm);
+		if (ret) {
+			pr_err("%s: pwm_enable on pwm failed %d\n",
+					__func__, ret);
+			return;
+		}
+		else
+		{
+		printk("lgsh pwm_enable succeed in %s!\n",__func__);
+		}
+	}
+	
+}
+
+/*for tempory use, when release, this function will be romove to appsbl*/
+void setup_power(void)
+{
+	int rc;
+	int ret;
+	struct regulator *reg_l9, *reg_l2;
+	//struct regulator *reg_l9, *reg_l23;
+	printk("lgsh----in %s \n",__func__);
+		//backlight_control();
+						
+		reg_l9 = regulator_get(NULL,
+				"8038_l9");
+		if (IS_ERR(reg_l9)) {
+			pr_err("could not get 8038_l9, rc = %ld\n",
+				PTR_ERR(reg_l9));
+			return;
+		}
+		rc = regulator_set_voltage(reg_l9, 2850000, 2850000);
+		if (rc) {
+			pr_err("set_voltage l9 failed, rc=%d\n", rc);
+			return;
+		}
+		rc = regulator_enable(reg_l9);
+		if (rc) {
+			pr_err("enable l9 failed, rc=%d\n", rc);
+			return;
+		}
+		printk("lgsh----in %s reg_l9 finish!\n",__func__);
+		#if 0
+		reg_l23 = regulator_get(NULL,
+				"8038_l23");
+		if (IS_ERR(reg_l23)) {
+			pr_err("could not get 8038_l23, rc = %ld\n",
+				PTR_ERR(reg_l23));
+			return;
+		}
+		rc = regulator_set_voltage(reg_l23, 1800000, 1800000);
+		if (rc) {
+			pr_err("set_voltage l23 failed, rc=%d\n", rc);
+			return;
+		}
+		rc = regulator_enable(reg_l23);
+		if (rc) {
+			pr_err("enable l8 failed, rc=%d\n", rc);
+			return;
+		}
+		printk("lgsh----in %s reg_l23 finish!\n",__func__);
+		#endif
+		
+		reg_l2 = regulator_get(NULL,"8038_l2");
+		if (IS_ERR(reg_l2)) {
+			pr_err("could not get 8038_l2, rc = %ld\n",
+				PTR_ERR(reg_l2));
+			return;
+		}
+		rc = regulator_set_voltage(reg_l2, 1200000, 1200000);
+		if (rc) {
+			pr_err("set_voltage l2 failed, rc=%d\n", rc);
+			return;
+		}
+		rc = regulator_enable(reg_l2);
+		if (rc) {
+			pr_err("enable l2 failed, rc=%d\n", rc);
+			return;
+		}
+		printk("lgsh----in %s reg_l2 finish!\n",__func__);
+		rc = gpio_request(DISP_RST_GPIO, "disp_rst_n");
+		if (rc) {
+			pr_err("request gpio DISP_RST_GPIO failed, rc=%d\n",
+				rc);
+			gpio_free(DISP_RST_GPIO);
+			return;
+		}
+		ret = gpio_tlmm_config(GPIO_CFG(DISP_RST_GPIO, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
+		if(ret)
+		{
+			printk("DISP_RST_GPIO config error!");
+			return;
+		}
+		usleep(10000);
+        ret = gpio_direction_output(DISP_RST_GPIO,1);
+		usleep(10);
+		ret = gpio_direction_output(DISP_RST_GPIO,0);
+		usleep(20);
+		ret = gpio_direction_output(DISP_RST_GPIO,1);
+		if(ret)
+		{
+			printk("DISP_RST_GPIO set error!");
+			return;
+		}
+
+		/*	
+		usleep(10000);
+		gpio_set_value(DISP_RST_GPIO, 1);
+		usleep(10);
+		gpio_set_value(DISP_RST_GPIO, 0);
+		usleep(20);
+		gpio_set_value(DISP_RST_GPIO, 1);
+		*/
+
 }
 
 static int mipi_dsi_panel_power(int on)
@@ -842,13 +1054,26 @@ void __init msm8930_allocate_fb_region(void)
 {
 	void *addr;
 	unsigned long size;
-
+#ifdef CONFIG_HUAWEI_KERNEL
+	/*self-adapt size of FrameBuffer*/
+	lcd_resolution_type lcd_resolution = get_lcd_resolution();
+	#ifdef CONFIG_FB_MSM_TRIPLE_BUFFER
+		size = roundup((lcd_resolution * 4), 4096) * 3;
+	#else
+		size = roundup((lcd_resolution * 4), 4096) * 2;
+	#endif
+	size = roundup(size, 4096);
+#else
 	size = MSM_FB_SIZE;
+#endif
 	addr = alloc_bootmem_align(size, 0x1000);
 	msm_fb_resources[0].start = __pa(addr);
 	msm_fb_resources[0].end = msm_fb_resources[0].start + size - 1;
-	pr_info("allocating %lu bytes at %p (%lx physical) for fb\n",
+	pr_info("allocating %ld bytes at %p (%lx physical) for fb\n",
 			size, addr, __pa(addr));
+#ifdef CONFIG_HW_ESD_DETECT
+	g_Can_Use_SW_Esd = can_use_sw_esd();
+#endif
 }
 
 void __init msm8930_set_display_params(char *prim_panel, char *ext_panel)

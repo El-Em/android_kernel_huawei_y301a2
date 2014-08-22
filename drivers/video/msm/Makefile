@@ -84,6 +84,9 @@ obj-$(CONFIG_FB_MSM_MIPI_DSI_NT35510) += mipi_NT35510.o
 obj-$(CONFIG_FB_MSM_MIPI_DSI_NT35516) += mipi_truly_tft540960_1_e.o
 obj-$(CONFIG_FB_MSM_MIPI_DSI_SIMULATOR) += mipi_simulator.o
 
+obj-y += hw_lcd_common.o
+obj-y += lcd_hw_debug.o
+obj-y += hw_backlight.o
 # MIPI Bridge
 obj-$(CONFIG_FB_MSM_MIPI_DSI_TC358764_DSI2LVDS) += mipi_tc358764_dsi2lvds.o
 
@@ -147,6 +150,14 @@ obj-$(CONFIG_FB_MSM_MIPI_NT35516_VIDEO_QHD_PT) += mipi_truly_tft540960_1_e_video
 obj-$(CONFIG_FB_MSM_MIPI_SIMULATOR_VIDEO) += mipi_simulator_video.o
 obj-$(CONFIG_FB_MSM_MIPI_CHIMEI_WXGA) += mipi_chimei_wxga_pt.o
 obj-$(CONFIG_FB_MSM_MIPI_CHIMEI_WUXGA) += mipi_chimei_wuxga.o
+obj-$(CONFIG_FB_HUAWEI_MIPI_DSI_RSP61408) += mipi_rsp61408_cmd_wvga.o
+obj-$(CONFIG_FB_HUAWEI_MIPI_DSI_NT35510) += mipi_nt35510_cmd_wvga.o
+obj-$(CONFIG_FB_HUAWEI_MIPI_DSI_R63308) += mipi_r63308_toshiba_video_720p.o
+obj-$(CONFIG_FB_HUAWEI_MIPI_DSI_NT35516_QHD) += mipi_nt35516_cmd_qhd.o
+obj-$(CONFIG_FB_HUAWEI_MIPI_DSI_HX8369A) += mipi_hx8369a_cmd_wvga.o
+obj-$(CONFIG_FB_HUAWEI_MIPI_DSI_OTM9608A_QHD) += mipi_otm9608a_cmd_qhd.o
+obj-$(CONFIG_FB_HUAWEI_MIPI_DSI_OTM8009A_WVGA) += mipi_otm8009a_cmd_wvga.o
+obj-$(CONFIG_FB_HUAWEI_MIPI_DSI_OTM1282A_HD) += mipi_otm1282a_cmd_hd.o
 endif
 
 obj-$(CONFIG_FB_MSM_LCDC_PANEL) += lcdc_panel.o

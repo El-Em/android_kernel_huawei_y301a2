@@ -24,6 +24,10 @@
 #include <mach/rpm-regulator.h>
 #include <mach/msm_memtypes.h>
 #include <mach/msm_rtb.h>
+#ifdef CONFIG_HUAWEI_KERNEL
+#include <hsad/config_general_struct.h>
+#include <hsad/config_interface.h>
+#endif
 
 /*
  * TODO: When physical 8930/PM8038 hardware becomes
@@ -144,6 +148,10 @@ void msm8960_init_pmic(void);
 void msm8960_pm8921_gpio_mpp_init(void);
 #endif
 
+#ifdef CONFIG_HUAWEI_GPIO_UNITE
+int hw_gpio_init(void);
+#endif
+
 void msm8930_init_mmc(void);
 int msm8930_init_gpiomux(void);
 void msm8930_allocate_fb_region(void);
@@ -152,7 +160,11 @@ void msm8930_pm8917_gpio_mpp_init(void);
 void msm8930_set_display_params(char *prim_panel, char *ext_panel);
 void msm8930_mdp_writeback(struct memtype_reserve *reserve_table);
 void __init msm8930_init_gpu(void);
+int msm8930_init_audio_acdb(void);  
 
+#ifdef CONFIG_HUAWEI_KERNEL
+void bluetooth_power_init(void);
+#endif
 #define PLATFORM_IS_CHARM25() \
 	(machine_is_msm8930_cdp() && \
 		(socinfo_get_platform_subtype() == 1) \

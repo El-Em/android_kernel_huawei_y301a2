@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,6 +9,14 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+
+#ifdef CONFIG_DYNAMIC_DEBUG
+#undef CONFIG_DYNAMIC_DEBUG
+#endif
+#ifndef DEBUG
+#define DEBUG
+#endif
+
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/firmware.h>
@@ -34,6 +42,9 @@
 #include <linux/kernel.h>
 #include <linux/gpio.h>
 #include <linux/wait.h>
+#include <linux/irq.h>
+#include <linux/wakelock.h>
+#include <linux/suspend.h>
 #include "wcd9304.h"
 
 #define WCD9304_RATES (SNDRV_PCM_RATE_8000|SNDRV_PCM_RATE_16000|\
@@ -272,6 +283,9 @@ struct sitar_priv {
 	bool hs_detect_work_stop;
 	struct delayed_work mbhc_btn_dwork;
 	unsigned long mbhc_last_resume; /* in jiffies */
+
+	bool gpio_irq_resend;
+	struct wake_lock irq_resend_wlock;
 };
 
 #ifdef CONFIG_DEBUG_FS
@@ -1568,8 +1582,8 @@ static int sitar_codec_enable_micbias(struct snd_soc_dapm_widget *w,
 			sitar_codec_switch_micbias(codec, 0);
 			SITAR_RELEASE_LOCK(sitar->codec_resource_lock);
 		}
-
-		snd_soc_update_bits(codec, w->reg, 0x1E, 0x00);
+        /* modify 0x1E --> 0x0E to make sure CAP_MODE bit could not be changed */
+		snd_soc_update_bits(codec, w->reg, 0x0E, 0x00);
 		sitar_codec_update_cfilt_usage(codec, cfilt_sel_val, 1);
 
 		if (strnstr(w->name, internal1_text, 30))
@@ -2301,7 +2315,7 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	{"LINEOUT2 DAC", NULL, "DAC3 MUX"},
 
 	{"LINEOUT1", NULL, "LINEOUT1 PA"},
-	{"LINEOUT2 PA", NULL, "CP"},
+	{"LINEOUT1 PA", NULL, "CP"},
 	{"LINEOUT1 PA", NULL, "LINEOUT1 DAC"},
 	{"LINEOUT1 DAC", NULL, "DAC2 MUX"},
 
@@ -3600,6 +3614,8 @@ static s32 sitar_codec_sta_dce_v(struct snd_soc_codec *codec, s8 dce,
 		mv = (value - z) * (s32)sitar->mbhc_data.micb_mv / (mb - z);
 	}
 
+    pr_debug("%s: dce=%d, bias_value=%d, value=%d, z=%d, mb=%d, mv=%d", 
+        __func__, dce, bias_value, value, z, mb, mv);
 	return mv;
 }
 
@@ -4405,9 +4421,18 @@ static irqreturn_t sitar_mechanical_plug_detect_irq(int irq, void *data)
 {
 	int r = IRQ_HANDLED;
 	struct snd_soc_codec *codec = data;
+	struct sitar_priv *sitar = snd_soc_codec_get_drvdata(codec);
 
 	if (unlikely(wcd9xxx_lock_sleep(codec->control_data) == false)) {
 		pr_warn("%s(): Failed to hold suspend\n", __func__);
+		/*
+		 * Give up this IRQ for now and resend this IRQ so IRQ can be
+		 * handled after system resume
+		 */
+		SITAR_ACQUIRE_LOCK(sitar->codec_resource_lock);
+		sitar->gpio_irq_resend = true;
+		SITAR_RELEASE_LOCK(sitar->codec_resource_lock);
+		wake_lock_timeout(&sitar->irq_resend_wlock, HZ);
 		r = IRQ_NONE;
 	} else {
 		sitar_hs_gpio_handler(codec);
@@ -5191,6 +5216,7 @@ static const struct sitar_reg_mask_val sitar_1_1_reg_defaults[] = {
 	SITAR_REG_VAL(SITAR_A_CDC_RX1_B6_CTL, 0x80),
 
 	SITAR_REG_VAL(SITAR_A_CDC_CLSG_FREQ_THRESH_B3_CTL, 0x1B),
+	SITAR_REG_VAL(SITAR_A_CDC_CLSG_FREQ_THRESH_B4_CTL, 0x5B),
 
 };
 
@@ -5421,6 +5447,13 @@ static int sitar_codec_probe(struct snd_soc_codec *codec)
 	}
 	wcd9xxx_disable_irq(codec->control_data, SITAR_IRQ_HPH_PA_OCPR_FAULT);
 
+	/*
+	 * Register suspend lock and notifier to resend edge triggered
+	 * gpio IRQs
+	 */
+	wake_lock_init(&sitar->irq_resend_wlock, WAKE_LOCK_SUSPEND,
+			"sitar_gpio_irq_resend");
+	sitar->gpio_irq_resend = false;
 	for (i = 0; i < ARRAY_SIZE(sitar_dai); i++) {
 		switch (sitar_dai[i].id) {
 		case AIF1_PB:
@@ -5473,6 +5506,9 @@ static int sitar_codec_remove(struct snd_soc_codec *codec)
 {
 	int i;
 	struct sitar_priv *sitar = snd_soc_codec_get_drvdata(codec);
+
+	wake_lock_destroy(&sitar->irq_resend_wlock);
+
 	wcd9xxx_free_irq(codec->control_data, SITAR_IRQ_SLIMBUS, sitar);
 	wcd9xxx_free_irq(codec->control_data, SITAR_IRQ_MBHC_RELEASE, sitar);
 	wcd9xxx_free_irq(codec->control_data, SITAR_IRQ_MBHC_POTENTIAL, sitar);
@@ -5550,10 +5586,27 @@ static int sitar_suspend(struct device *dev)
 
 static int sitar_resume(struct device *dev)
 {
+	int irq;
 	struct platform_device *pdev = to_platform_device(dev);
 	struct sitar_priv *sitar = platform_get_drvdata(pdev);
 	dev_dbg(dev, "%s: system resume\n", __func__);
-	sitar->mbhc_last_resume = jiffies;
+	if (sitar) {
+		SITAR_ACQUIRE_LOCK(sitar->codec_resource_lock);
+		sitar->mbhc_last_resume = jiffies;
+		if (sitar->gpio_irq_resend) {
+			WARN_ON(!sitar->mbhc_cfg.gpio_irq);
+			sitar->gpio_irq_resend = false;
+
+			irq = sitar->mbhc_cfg.gpio_irq;
+			pr_debug("%s: Resending GPIO IRQ %d\n", __func__, irq);
+			irq_set_pending(irq);
+			check_irq_resend(irq_to_desc(irq), irq);
+
+			/* release suspend lock */
+			wake_unlock(&sitar->irq_resend_wlock);
+		}
+		SITAR_RELEASE_LOCK(sitar->codec_resource_lock);
+	}
 	return 0;
 }
 

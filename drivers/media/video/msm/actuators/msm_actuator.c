@@ -373,9 +373,8 @@ static int32_t msm_actuator_init_step_table(struct msm_actuator_ctrl_t *a_ctrl,
 			}
 		}
 	}
-
 	for (i=0; i<set_info->af_tuning_params.total_steps; i++) {
-		printk("%s: Step_Pos_Table[%d]:%d\n", __func__, i,
+		CDBG("%s: Step_Pos_Table[%d]:%d\n", __func__, i,
 			a_ctrl->step_position_table[i]);
 	}
 	return rc;

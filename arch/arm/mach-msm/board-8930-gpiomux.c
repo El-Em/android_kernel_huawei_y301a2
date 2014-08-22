@@ -17,6 +17,9 @@
 #include <mach/socinfo.h>
 #include "devices.h"
 #include "board-8930.h"
+#ifdef CONFIG_HUAWEI_GPIO_UNITE
+struct msm_gpiomux_config msm8930_gpio_configs[NR_GPIO_IRQS];
+#endif
 
 /* The SPI configurations apply to GSBI 1*/
 static struct gpiomux_setting spi_active = {
@@ -132,6 +135,54 @@ static struct gpiomux_setting wcnss_5wire_active_cfg = {
 	.pull = GPIOMUX_PULL_DOWN,
 };
 
+#if 0
+#ifdef CONFIG_HUAWEI_NFC_PN544
+static struct gpiomux_setting nfc_ven_sus_cfg = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_NONE,
+	.dir = GPIOMUX_OUT_HIGH,
+};
+
+static struct gpiomux_setting nfc_int_sus_cfg = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_DOWN,
+	.dir = GPIOMUX_IN,
+};
+
+static struct gpiomux_setting nfc_dlnd_sus_cfg = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_NONE,
+	.dir = GPIOMUX_OUT_LOW,
+};
+
+#if 0
+static struct gpiomux_setting nfc_ven_act_cfg = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_UP,
+	.dir = GPIOMUX_OUT_HIGH,
+};
+
+static struct gpiomux_setting nfc_int_act_cfg = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_NONE,
+	.dir = GPIOMUX_IN,
+};
+
+static struct gpiomux_setting nfc_dlnd_act_cfg = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_NONE,
+	.dir = GPIOMUX_OUT_LOW,
+};
+#endif
+#endif
+#endif
+
 static struct gpiomux_setting atmel_resout_sus_cfg = {
 	.func = GPIOMUX_FUNC_GPIO,
 	.drv = GPIOMUX_DRV_6MA,
@@ -175,12 +226,15 @@ static struct gpiomux_setting hsusb_sus_cfg = {
 	.dir = GPIOMUX_OUT_LOW,
 };
 static struct msm_gpiomux_config msm8930_hsusb_configs[] = {
+/* Avoid the issue BT SCO path cannot be created */
+#if 0
 	{
 		.gpio = 63,     /* HSUSB_EXTERNAL_5V_LDO_EN */
 		.settings = {
 			[GPIOMUX_SUSPENDED] = &hsusb_sus_cfg,
 		},
 	},
+#endif
 	{
 		.gpio = 97,     /* HSUSB_5V_EN */
 		.settings = {
@@ -190,6 +244,8 @@ static struct msm_gpiomux_config msm8930_hsusb_configs[] = {
 };
 #endif
 
+/* Merge MI2S patch */
+#if 0
 static struct gpiomux_setting hap_lvl_shft_suspended_config = {
 	.func = GPIOMUX_FUNC_GPIO,
 	.drv = GPIOMUX_DRV_2MA,
@@ -201,6 +257,7 @@ static struct gpiomux_setting hap_lvl_shft_active_config = {
 	.drv = GPIOMUX_DRV_8MA,
 	.pull = GPIOMUX_PULL_UP,
 };
+#endif
 
 static struct gpiomux_setting ap2mdm_cfg = {
 	.func = GPIOMUX_FUNC_GPIO,
@@ -471,6 +528,74 @@ static struct msm_gpiomux_config msm8960_audio_auxpcm_configs[] __initdata = {
 	},
 };
 
+/* Merge MI2S patch */
+static struct gpiomux_setting  mi2s_act_cfg = {
+	.func = GPIOMUX_FUNC_1,
+	.drv = GPIOMUX_DRV_8MA,
+	.pull = GPIOMUX_PULL_NONE,
+};
+
+static struct gpiomux_setting  mi2s_sus_cfg = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_DOWN,
+};
+
+static struct msm_gpiomux_config msm8930_mi2s_configs[] __initdata = {
+	{
+		.gpio	= 47,		/* mi2s ws */
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &mi2s_sus_cfg,
+			[GPIOMUX_ACTIVE] = &mi2s_act_cfg,
+		},
+	},
+	{
+		.gpio	= 48,		/* mi2s sclk */
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &mi2s_sus_cfg,
+			[GPIOMUX_ACTIVE] = &mi2s_act_cfg,
+		},
+	},
+	{
+		.gpio	= 49,		/* mi2s dout3 */
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &mi2s_sus_cfg,
+			[GPIOMUX_ACTIVE] = &mi2s_act_cfg,
+		},
+	},
+#if 0
+	{
+		.gpio	= 50,		/* mi2s dout2 */
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &mi2s_sus_cfg,
+			[GPIOMUX_ACTIVE] = &mi2s_act_cfg,
+		},
+	},
+	{
+		.gpio	= 51,		/* mi2s dout1 */
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &mi2s_sus_cfg,
+			[GPIOMUX_ACTIVE] = &mi2s_act_cfg,
+		},
+	},
+	{
+		.gpio	= 52,		/* mi2s dout0 */
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &mi2s_sus_cfg,
+			[GPIOMUX_ACTIVE] = &mi2s_act_cfg,
+		},
+	},
+
+	{
+		.gpio	= 53,		/* mi2s mclk */
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &mi2s_sus_cfg,
+			[GPIOMUX_ACTIVE] = &mi2s_act_cfg,
+		},
+	},
+#endif
+};
+
 static struct msm_gpiomux_config wcnss_5wire_interface[] = {
 	{
 		.gpio = 84,
@@ -509,6 +634,100 @@ static struct msm_gpiomux_config wcnss_5wire_interface[] = {
 	},
 };
 
+/*In order to save powert,make the GPIO except clk be PULL_UP state when suspend state*/
+#ifdef CONFIG_HUAWEI_KERNEL
+static struct gpiomux_setting sdc4_suspend_cfg = {
+	.func = GPIOMUX_FUNC_2,
+	.drv  = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_UP,
+};
+
+static struct gpiomux_setting sdc4_clk_suspend_cfg = {
+	.func = GPIOMUX_FUNC_2,
+	.drv  = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_DOWN,
+};
+
+static struct gpiomux_setting sdc4_active_cfg = {
+	.func = GPIOMUX_FUNC_2,
+	.drv  = GPIOMUX_DRV_16MA,
+	.pull = GPIOMUX_PULL_UP,
+};
+
+static struct msm_gpiomux_config sdc4_interface[] = {
+	{
+		.gpio = 83,
+		.settings = {
+			[GPIOMUX_ACTIVE]    = &sdc4_active_cfg,
+			[GPIOMUX_SUSPENDED] = &sdc4_suspend_cfg,
+		},
+	},
+	{
+		.gpio = 84,
+		.settings = {
+			[GPIOMUX_ACTIVE]    = &sdc4_active_cfg,
+			[GPIOMUX_SUSPENDED] = &sdc4_suspend_cfg,
+		},
+	},
+	{
+		.gpio = 85,
+		.settings = {
+			[GPIOMUX_ACTIVE]    = &sdc4_active_cfg,
+			[GPIOMUX_SUSPENDED] = &sdc4_suspend_cfg,
+		},
+	},
+	{
+		.gpio = 86,
+		.settings = {
+			[GPIOMUX_ACTIVE]    = &sdc4_active_cfg,
+			[GPIOMUX_SUSPENDED] = &sdc4_suspend_cfg,
+		},
+	},
+	{
+		.gpio = 87,
+		.settings = {
+			[GPIOMUX_ACTIVE]    = &sdc4_active_cfg,
+			[GPIOMUX_SUSPENDED] = &sdc4_suspend_cfg,
+		},
+	},
+	{
+		.gpio = 88,
+		.settings = {
+			[GPIOMUX_ACTIVE]    = &sdc4_active_cfg,
+			[GPIOMUX_SUSPENDED] = &sdc4_clk_suspend_cfg,
+		},
+	},
+};
+#endif
+
+#if 0
+#ifdef CONFIG_HUAWEI_NFC_PN544
+static struct msm_gpiomux_config msm8930_nfc_configs[] __initdata = {
+	{	/* NFC VEN */
+		.gpio = 25,
+		.settings = {
+//			[GPIOMUX_ACTIVE]    = &nfc_ven_act_cfg,
+			[GPIOMUX_SUSPENDED] = &nfc_ven_sus_cfg,
+		},
+	},
+	{	/* NFC INTERRUPT */
+		.gpio = 106,
+		.settings = {
+//			[GPIOMUX_ACTIVE]    = &nfc_int_act_cfg,
+			[GPIOMUX_SUSPENDED] = &nfc_int_sus_cfg,
+		},
+	},
+	{	/* NFC DOWNLOAD */
+		.gpio = 24,
+		.settings = {
+//			[GPIOMUX_ACTIVE]    = &nfc_dlnd_act_cfg,
+			[GPIOMUX_SUSPENDED] = &nfc_dlnd_sus_cfg,
+		},
+	},
+};
+#endif
+#endif
+
 static struct msm_gpiomux_config msm8960_atmel_configs[] __initdata = {
 	{	/* TS INTERRUPT */
 		.gpio = 11,
@@ -533,6 +752,8 @@ static struct msm_gpiomux_config msm8960_atmel_configs[] __initdata = {
 	},
 };
 
+/* Merge MI2S patch */
+#if 0
 static struct msm_gpiomux_config hap_lvl_shft_config[] __initdata = {
 	{
 		.gpio = 47,
@@ -542,6 +763,7 @@ static struct msm_gpiomux_config hap_lvl_shft_config[] __initdata = {
 		},
 	},
 };
+#endif
 
 static struct msm_gpiomux_config mdm_configs[] __initdata = {
 	/* AP2MDM_STATUS */
@@ -701,6 +923,259 @@ static struct msm_gpiomux_config msm8930_sd_det_config[] __initdata = {
 	},
 };
 
+#ifdef CONFIG_HUAWEI_KERNEL
+static struct gpiomux_setting gpio_sus_cfg = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_DOWN,
+	.dir = GPIOMUX_IN,
+};
+
+//nfc_wake gpio suspend configure
+static struct gpiomux_setting gpio_sus_cfg_nfc = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_DOWN,
+	.dir = GPIOMUX_OUT_HIGH,
+};
+
+static struct gpiomux_setting gpio_int_sus_cfg = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_NONE,
+	.dir = GPIOMUX_IN,
+};
+
+static struct msm_gpiomux_config msm8930_gpio_sus_configs[] = {
+	{
+		.gpio = 11,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_int_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_int_sus_cfg,
+	
+		},
+	},
+	{
+		.gpio = 24,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg_nfc,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg_nfc,
+		},
+	},
+	{
+		.gpio = 50,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+	{
+		.gpio = 51,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_int_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_int_sus_cfg,
+		},
+	},
+/* Avoid the issue BT SCO path cannot be created */
+#if 0
+	{
+		.gpio = 63,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+	{
+		.gpio = 64,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+	{
+		.gpio = 65,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+	{
+		.gpio = 66,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+#endif
+	/*Add for touch power on*/
+	{
+		.gpio = 67,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+	{
+		.gpio = 73,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+	{
+		.gpio = 77,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+	{
+		.gpio = 78,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+	{
+		.gpio = 90,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+	{
+		.gpio = 106,   
+		.settings = {
+			[GPIOMUX_SUSPENDED] = &gpio_sus_cfg,
+			[GPIOMUX_ACTIVE] = &gpio_sus_cfg,
+		},
+	},
+};
+#endif
+
+#ifdef CONFIG_HUAWEI_GPIO_UNITE
+int hw_gpio_init(void)
+{
+    int i;
+    int config_index = 0;
+    const struct gpio_config_type* pGpioCfgTbl = NULL;
+
+    pGpioCfgTbl = get_gpio_config_table();
+
+    if(NULL == pGpioCfgTbl)
+    {
+       pr_err(KERN_ERR "get gpio config table failed\n"); 
+       return -EFAULT;
+    }
+
+    for(i = 0; i < NR_GPIO_IRQS; i++)
+    {         
+        /* get the gpio active config and suspend config from the config excel */
+        if((pGpioCfgTbl + i)->init_func != NOSET   \
+            || (pGpioCfgTbl + i)->sleep_func != NOSET)
+        {
+            msm8930_gpio_configs[config_index].gpio = (pGpioCfgTbl + i)->gpio_number;
+    
+            if((pGpioCfgTbl + i)->init_func != NOSET)
+            {         
+                msm8930_gpio_configs[config_index].settings[GPIOMUX_ACTIVE] = \
+                    kmalloc(sizeof(*msm8930_gpio_configs[config_index].settings[GPIOMUX_ACTIVE]),\
+                            GFP_KERNEL);
+
+		   memset(msm8930_gpio_configs[config_index].settings[GPIOMUX_ACTIVE],
+				0,sizeof(*msm8930_gpio_configs[config_index].settings[GPIOMUX_ACTIVE]));
+
+                if (!(msm8930_gpio_configs[config_index].settings[GPIOMUX_ACTIVE]))
+                {
+                    pr_err(KERN_ERR "failed to malloc memory for gpio config.\n");
+                    goto gpio_configs_free;
+                }                                   
+
+                msm8930_gpio_configs[config_index].settings[GPIOMUX_ACTIVE]->func = \
+                    (pGpioCfgTbl + i)->init_func;
+
+                if((pGpioCfgTbl + i)->init_dir!= NOSET)
+                {
+                    msm8930_gpio_configs[config_index].settings[GPIOMUX_ACTIVE]->dir = \
+                        (pGpioCfgTbl + i)->init_dir;
+                }
+
+                if((pGpioCfgTbl + i)->init_drv != NOSET)
+                {
+                    msm8930_gpio_configs[config_index].settings[GPIOMUX_ACTIVE]->drv = \
+                        (pGpioCfgTbl + i)->init_drv;
+                }
+
+                if((pGpioCfgTbl + i)->init_pull != NOSET)
+                {
+                    msm8930_gpio_configs[config_index].settings[GPIOMUX_ACTIVE]->pull = \
+                        (pGpioCfgTbl + i)->init_pull;
+                }
+            }
+
+            if((pGpioCfgTbl + i)->sleep_func != NOSET)
+            { 
+                msm8930_gpio_configs[config_index].settings[GPIOMUX_SUSPENDED] = \
+                    kmalloc(sizeof(*msm8930_gpio_configs[config_index].settings[GPIOMUX_SUSPENDED]),\
+                            GFP_KERNEL);
+		   memset(msm8930_gpio_configs[config_index].settings[GPIOMUX_SUSPENDED],
+				0,sizeof(*msm8930_gpio_configs[config_index].settings[GPIOMUX_SUSPENDED]));
+
+                if (!msm8930_gpio_configs[config_index].settings[GPIOMUX_SUSPENDED])
+                {
+                    pr_err(KERN_ERR "failed to malloc memory for gpio config.\n");
+                    goto gpio_configs_free;
+                }
+
+                msm8930_gpio_configs[config_index].settings[GPIOMUX_SUSPENDED]->func = \
+                    (pGpioCfgTbl + i)->sleep_func;
+
+                if((pGpioCfgTbl + i)->sleep_dir != NOSET)
+                {
+                    msm8930_gpio_configs[config_index].settings[GPIOMUX_SUSPENDED]->dir = \
+                        (pGpioCfgTbl + i)->sleep_dir;
+                }
+
+                if((pGpioCfgTbl + i)->sleep_drv != NOSET)
+                {
+                    msm8930_gpio_configs[config_index].settings[GPIOMUX_SUSPENDED]->drv = \
+                        (pGpioCfgTbl + i)->sleep_drv;
+                }
+
+                if((pGpioCfgTbl + i)->sleep_pull != NOSET)
+                {
+                    msm8930_gpio_configs[config_index].settings[GPIOMUX_SUSPENDED]->pull = \
+                        (pGpioCfgTbl + i)->sleep_pull;
+                }
+            }
+
+            config_index++;
+        }    
+    }
+
+    /* gpio config for active status and suspend status. */
+    msm_gpiomux_install(msm8930_gpio_configs,
+			ARRAY_SIZE(msm8930_gpio_configs));
+
+gpio_configs_free:
+    /* free memory */
+    for(i = 0; i < NR_GPIO_IRQS; i++)
+    {
+        if(msm8930_gpio_configs[i].settings[GPIOMUX_ACTIVE] != NULL)
+        {
+           kfree(msm8930_gpio_configs[i].settings[GPIOMUX_ACTIVE]); 
+        }
+
+        if(msm8930_gpio_configs[i].settings[GPIOMUX_SUSPENDED] != NULL)
+        {
+           kfree(msm8930_gpio_configs[i].settings[GPIOMUX_SUSPENDED]); 
+        } 
+    }
+
+    return 0;
+}
+#endif
+
 static struct gpiomux_setting gyro_int_line = {
 	.func = GPIOMUX_FUNC_GPIO,
 	.drv = GPIOMUX_DRV_2MA,
@@ -729,6 +1204,7 @@ static struct msm_gpiomux_config msm_sitar_config[] __initdata = {
 int __init msm8930_init_gpiomux(void)
 {
 	int rc = msm_gpiomux_init(NR_GPIO_IRQS);
+	hw_wifi_device_type  wifi_device_type = WIFI_TYPE_UNKNOWN;
 	if (rc) {
 		pr_err(KERN_ERR "msm_gpiomux_init failed %d\n", rc);
 		return rc;
@@ -741,6 +1217,10 @@ int __init msm8930_init_gpiomux(void)
 
 	msm_gpiomux_install(msm8960_gsbi_configs,
 			ARRAY_SIZE(msm8960_gsbi_configs));
+
+	/* Merge MI2S patch */
+	msm_gpiomux_install(msm8930_mi2s_configs,
+			ARRAY_SIZE(msm8930_mi2s_configs));
 
 	msm_gpiomux_install(msm8960_atmel_configs,
 			ARRAY_SIZE(msm8960_atmel_configs));
@@ -759,14 +1239,36 @@ int __init msm8930_init_gpiomux(void)
 
 	msm_gpiomux_install(msm8960_audio_auxpcm_configs,
 			ARRAY_SIZE(msm8960_audio_auxpcm_configs));
-
+#ifndef CONFIG_HUAWEI_KERNEL
 	msm_gpiomux_install(wcnss_5wire_interface,
 			ARRAY_SIZE(wcnss_5wire_interface));
 
+#else
+	/*optimize the code*/
+    wifi_device_type = get_hw_wifi_device_type();
+    if((WIFI_BROADCOM_4330 == wifi_device_type)||(WIFI_BROADCOM_4330X == wifi_device_type))
+    {
+        msm_gpiomux_install(sdc4_interface,
+                ARRAY_SIZE(sdc4_interface));
+    }
+    else if(WIFI_QUALCOMM_WCN3660 == wifi_device_type)
+    {
+	msm_gpiomux_install(wcnss_5wire_interface,
+			ARRAY_SIZE(wcnss_5wire_interface));
+    }
+    else
+    {
+        printk("unkonw wifi chip type!\n");
+    }
+#endif
+
 	if (machine_is_msm8930_mtp() || machine_is_msm8930_fluid() ||
 		machine_is_msm8930_cdp()) {
+/* Merge MI2S patch */
+#if 0
 		msm_gpiomux_install(hap_lvl_shft_config,
 			ARRAY_SIZE(hap_lvl_shft_config));
+#endif
 #ifdef MSM8930_PHASE_2
 		msm_gpiomux_install(msm8930_hsusb_configs,
 			ARRAY_SIZE(msm8930_hsusb_configs));
@@ -802,5 +1304,8 @@ int __init msm8930_init_gpiomux(void)
 
 	msm_gpiomux_install(msm_sitar_config, ARRAY_SIZE(msm_sitar_config));
 
+#ifdef CONFIG_HUAWEI_KERNEL
+	msm_gpiomux_install(msm8930_gpio_sus_configs, ARRAY_SIZE(msm8930_gpio_sus_configs));
+#endif
 	return 0;
 }

@@ -18,6 +18,15 @@
 
 #define PM8921_CHARGER_DEV_NAME	"pm8921-charger"
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#define MAX_BATTERY_VOLTAGE_4350MV 	4350
+#define MAX_BATTERY_VOLTAGE_4200MV 	4200
+#define TEMPERATURE_DC_PER_C 	10
+#define MAX_BATTERY_VOLTAGE_SLEEP_TIMER_MS  10
+#define MAX_COUNT  20
+#define MAX_WARM_BAT_CHG_CURRENT   800
+#endif
+
 struct pm8xxx_charger_core_data {
 	unsigned int	vbat_channel;
 	unsigned int	batt_temp_channel;
@@ -158,6 +167,10 @@ struct pm8921_charger_platform_data {
 	unsigned int			term_current;
 	int				cool_temp;
 	int				warm_temp;
+#ifdef CONFIG_HUAWEI_KERNEL
+	int				cold_temp;
+	int				hot_temp;
+#endif
 	unsigned int			temp_check_period;
 	unsigned int			max_bat_chg_current;
 	unsigned int			usb_max_current;
@@ -189,6 +202,20 @@ struct pm8921_charger_platform_data {
 	int				btc_panic_if_cant_stop_chg;
 	int				stop_chg_upon_expiry;
 };
+#ifdef CONFIG_HUAWEI_KERNEL
+#define MAX_CHARE_STD_LENGTH 16
+struct pm8921_charge_std_data {
+	int				cool_temp;    /*cool_temp is same as cold_temp, charging is stopped when lower than cool_temp*/
+	int				warm_temp;  /*limited charging when > warm_temp*/
+	int				cold_temp;  /*stop charging when < cold_temp*/
+	int				hot_temp;  /*stop charging when > hot_temp*/
+	int				fcc_div_warm_chg_curr;  /*when > cold_temp, charging current value = fcc/fcc_div_warm_chg_curr*/
+};
+struct charge_std_map {
+	char charge_std[16];
+	struct pm8921_charge_std_data *charge_std_data;
+};
+#endif
 
 enum pm8921_charger_source {
 	PM8921_CHG_SRC_NONE,
@@ -240,6 +267,9 @@ int pm8921_set_max_battery_charge_current(int ma);
  * is required if input current limiting is disabled.
  */
 int pm8921_disable_input_current_limit(bool disable);
+#ifdef CONFIG_INPUT_HW_ATE
+void notify_usb_status_to_ate(void (*callback)(uint8_t));
+#endif
 
 /**
  * pm8921_set_usb_power_supply_type - set USB supply type

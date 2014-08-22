@@ -56,6 +56,18 @@
 static int restart_mode;
 void *restart_reason;
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#define RESTART_FLAG_ADDR  0x800
+#define RESTART_FLAG_MAGIC_NUM  0x25866220
+#define RESETFACTORY_MAGIC_NUM  0x77665520
+#define RESETUSER_MAGIC_NUM  0x77665522
+#define OEMRTC_FLAG_MAGIC_NUM  0x77665524
+#define SDUPDATE_FLAG_MAGIC_NUM  0x77665528
+#define USBUPDATE_FLAG_MAGIC_NUM  0x77665523
+#define QFUSE_MAGIC_NUM  0xF4C3D2C1
+#define QFUSE_MAGIC_OFFSET  0x30
+void *restart_flag_addr;
+#endif
 int pmic_reset_irq;
 static void __iomem *msm_tmr0_base;
 
@@ -65,9 +77,21 @@ static void *dload_mode_addr;
 
 /* Download mode master kill-switch */
 static int dload_set(const char *val, struct kernel_param *kp);
+#ifdef CONFIG_HUAWEI_KERNEL
+static int nv_dload_set(const char *val, struct kernel_param *kp);
+#endif
+
 static int download_mode = 1;
+#ifdef CONFIG_HUAWEI_KERNEL
+static int nv_download_mode = 0;
+#endif
+
 module_param_call(download_mode, dload_set, param_get_int,
 			&download_mode, 0644);
+#ifdef CONFIG_HUAWEI_KERNEL
+module_param_call(nv_download_mode, nv_dload_set, param_get_int,
+			&nv_download_mode, 0644);
+#endif
 
 static int panic_prep_restart(struct notifier_block *this,
 			      unsigned long event, void *ptr)
@@ -80,6 +104,73 @@ static struct notifier_block panic_blk = {
 	.notifier_call	= panic_prep_restart,
 };
 
+#ifdef CONFIG_HUAWEI_KERNEL
+/*****************************************************************************
+ Function    : set_dload_mode
+ Description  : set dload mode, Only if the nv_download_mode = 1(nv905 = 0), can go to download mode
+ Input        :  int on  
+ Output       : 
+ Return Value : 
+ Calls        : 
+ Called By    : 
+ 
+  History        :
+  1.Date         : 2012/28/9
+    Author       : liuting
+    Modification : Created function
+
+*****************************************************************************/
+static void set_dload_mode(int on)
+{
+       /*Only if the nv_download_mode = 1(nv905 = 0), can go to download mode*/
+	if (dload_mode_addr){
+		__raw_writel((on && nv_download_mode) ? 0xE47B337D : 0, dload_mode_addr);
+		__raw_writel((on && nv_download_mode) ? 0xCE14091A : 0,
+		       dload_mode_addr + sizeof(unsigned int));
+		if (on && nv_download_mode)
+		{
+			printk("nv_download_mode = 1, set to error dump mode.\n");
+		}
+		mb();
+	}
+}
+
+/*****************************************************************************
+ Function    : nv_dload_set
+ Description  : set nv_download_mode
+ Input        :  onst char *val, struct kernel_param *kp  
+ Output       : 
+ Return Value : FAIL or SUCCESS
+ Calls        : 
+ Called By    : 
+ 
+  History        :
+  1.Date         : 2012/28/9
+    Author       : liuting
+    Modification : Created function
+
+*****************************************************************************/
+static int nv_dload_set(const char *val, struct kernel_param *kp)
+{
+	int ret;
+	int old_val = nv_download_mode;
+
+	ret = param_set_int(val, kp);
+
+	if (ret)
+		return ret;
+
+	/* If nv_download_mode is not zero or one, ignore. */
+	if (nv_download_mode >> 1) {
+		nv_download_mode = old_val;
+		return -EINVAL;
+	}
+
+	set_dload_mode(download_mode);
+
+	return 0;
+}
+#else
 static void set_dload_mode(int on)
 {
 	if (dload_mode_addr) {
@@ -89,6 +180,7 @@ static void set_dload_mode(int on)
 		mb();
 	}
 }
+#endif
 
 static int dload_set(const char *val, struct kernel_param *kp)
 {
@@ -187,6 +279,94 @@ static irqreturn_t resout_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+#ifdef CONFIG_HUAWEI_KERNEL
+static void qfuse_handle(const char *cmd)
+{
+    char *fuse_data_p = NULL;
+    unsigned int rdata = 0;
+
+    if(NULL == cmd)
+    {
+        return;
+    }
+    
+    //write qfuse magic
+    __raw_writel(QFUSE_MAGIC_NUM, (dload_mode_addr+QFUSE_MAGIC_OFFSET)); /*addr 0x2A03F000 */
+
+    //get r0
+    fuse_data_p = strstr(cmd, "r0=");
+    rdata = 0;
+    if(NULL != fuse_data_p)
+    {
+        fuse_data_p = fuse_data_p+3;
+        if(NULL != fuse_data_p)
+        {
+            rdata = simple_strtoul(fuse_data_p, NULL, 16);
+        }
+    }
+    //write r0
+    pr_err("qfuse_handle r0 = 0x%x\n", rdata);
+    __raw_writel(rdata, (dload_mode_addr+QFUSE_MAGIC_OFFSET+4));
+    pr_err("qfuse_handle dload_mode_addr r0 = 0x%x\n", *((unsigned int*)(dload_mode_addr+QFUSE_MAGIC_OFFSET+4)));
+
+    //get r1
+    fuse_data_p = strstr(cmd, "r1=");
+    rdata = 0;
+    if(NULL != fuse_data_p)
+    {
+        fuse_data_p = fuse_data_p+3;
+        if(NULL != fuse_data_p)
+        {
+            rdata = simple_strtoul(fuse_data_p, NULL, 16);
+        }
+    }
+    //write r1
+    pr_err("qfuse_handle r1 = 0x%x\n", rdata);
+    __raw_writel(rdata, (dload_mode_addr+QFUSE_MAGIC_OFFSET+8));
+    pr_err("qfuse_handle dload_mode_addr r1 = 0x%x\n", *((unsigned int*)(dload_mode_addr+QFUSE_MAGIC_OFFSET+8)));
+
+    //get r2
+    fuse_data_p = strstr(cmd, "r2=");
+    rdata = 0;
+    if(NULL != fuse_data_p)
+    {
+        fuse_data_p = fuse_data_p+3;
+        if(NULL != fuse_data_p)
+        {
+            rdata = simple_strtoul(fuse_data_p, NULL, 16);
+        }
+    }
+
+    //write r2
+    pr_err("qfuse_handle r2 = 0x%x\n", rdata);
+    __raw_writel(rdata, (dload_mode_addr+QFUSE_MAGIC_OFFSET+12));
+    pr_err("qfuse_handle dload_mode_addr r2 = 0x%x\n", *((unsigned int*)(dload_mode_addr+QFUSE_MAGIC_OFFSET+12)));
+
+    //get r3
+    fuse_data_p = strstr(cmd, "r3=");
+    rdata = 0;
+    if(NULL != fuse_data_p)
+    {
+        fuse_data_p = fuse_data_p+3;
+        if(NULL != fuse_data_p)
+        {
+            rdata = simple_strtoul(fuse_data_p, NULL, 16);
+        }
+    }
+    //write r3
+    pr_err("qfuse_handle r3 = 0x%x\n", rdata);
+    __raw_writel(rdata, (dload_mode_addr+QFUSE_MAGIC_OFFSET+16));
+    pr_err("qfuse_handle dload_mode_addr r3 = 0x%x\n", *((unsigned int*)(dload_mode_addr+QFUSE_MAGIC_OFFSET+16)));
+
+    pr_err("qfuse_handle dload_mode_addr magic = 0x%x\n", *((unsigned int*)(dload_mode_addr+QFUSE_MAGIC_OFFSET)));
+
+    //enter recovery mode
+    //__raw_writel(0x77665502, restart_reason); 
+
+    mb();
+}
+#endif
+
 static void msm_restart_prepare(const char *cmd)
 {
 #ifdef CONFIG_MSM_DLOAD_MODE
@@ -206,6 +386,12 @@ static void msm_restart_prepare(const char *cmd)
 		set_dload_mode(0);
 #endif
 
+	printk(KERN_NOTICE "Going down for restart now\n");
+
+#ifdef CONFIG_HUAWEI_KERNEL
+       /* write the flag for reboot action */
+       __raw_writel(RESTART_FLAG_MAGIC_NUM,  restart_flag_addr);
+#endif
 	pm8xxx_reset_pwr_off(1);
 
 	if (cmd != NULL) {
@@ -213,6 +399,23 @@ static void msm_restart_prepare(const char *cmd)
 			__raw_writel(0x77665500, restart_reason);
 		} else if (!strncmp(cmd, "recovery", 8)) {
 			__raw_writel(0x77665502, restart_reason);
+#ifdef CONFIG_HUAWEI_KERNEL
+		} else if(!strncmp(cmd, "resetfactory", 12)){
+			__raw_writel(RESETFACTORY_MAGIC_NUM, restart_reason);
+		} else if(!strncmp(cmd, "resetuser", 9)){
+			__raw_writel(RESETUSER_MAGIC_NUM, restart_reason);
+		} else if(!strncmp(cmd, "usbdload", 8)){
+			set_dload_mode(1);
+		/* power off alarm */
+		} else if(!strncmp(cmd, "oem-rtc", 7)) {
+			__raw_writel(OEMRTC_FLAG_MAGIC_NUM, restart_reason);
+		} else if(!strncmp(cmd, "sdupdate", 8)) {
+			__raw_writel(SDUPDATE_FLAG_MAGIC_NUM, restart_reason);
+		} else if(!strncmp(cmd, "usbupdate", 9)){
+		__raw_writel(USBUPDATE_FLAG_MAGIC_NUM, restart_reason);
+		} else if(!strncmp(cmd, "qfuse", 5)) {
+		     qfuse_handle(cmd);
+#endif
 		} else if (!strncmp(cmd, "oem-", 4)) {
 			unsigned long code;
 			code = simple_strtoul(cmd + 4, NULL, 16) & 0xff;
@@ -255,6 +458,9 @@ static int __init msm_pmic_restart_init(void)
 {
 	int rc;
 
+#ifdef CONFIG_HUAWEI_KERNEL
+	restart_flag_addr = MSM_IMEM_BASE  + RESTART_FLAG_ADDR;
+#endif
 	if (pmic_reset_irq != 0) {
 		rc = request_any_context_irq(pmic_reset_irq,
 					resout_irq_handler, IRQF_TRIGGER_HIGH,

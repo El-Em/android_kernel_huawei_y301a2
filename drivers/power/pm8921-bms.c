@@ -32,6 +32,10 @@
 #include <linux/mutex.h>
 #include <linux/rtc.h>
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#include "hw_bms_battery_debug.h"
+#include <hsad/config_interface.h>
+#endif
 #define BMS_CONTROL		0x224
 #define BMS_S1_DELAY		0x225
 #define BMS_OUTPUT0		0x230
@@ -104,6 +108,9 @@ struct pm8921_bms_chip {
 	unsigned long		last_calib_time;
 	int			last_calib_temp;
 	struct mutex		calib_mutex;
+#ifdef CONFIG_HUAWEI_KERNEL
+	struct delayed_work	set_battery_debug;
+#endif
 	unsigned int		revision;
 	unsigned int		xoadc_v0625_usb_present;
 	unsigned int		xoadc_v0625_usb_absent;
@@ -195,6 +202,59 @@ static int calculated_soc = -EINVAL;
 static int last_soc = -EINVAL;
 static int last_real_fcc_mah = -EINVAL;
 static int last_real_fcc_batt_temp = -EINVAL;
+#ifdef CONFIG_HUAWEI_KERNEL
+static bool set_battery_debug_flag = FALSE; /* if get battery data success */
+/* modify for 1.7232 baseline upgrade */
+struct bms_battery_data battery_debug_data;
+static struct single_row_lut palladium_debug_fcc_temp;
+static struct single_row_lut palladium_debug_fcc_sf;
+static struct sf_lut palladium_debug_pc_sf ;
+static struct sf_lut palladium_debug_rbatt_sf;
+static struct pc_temp_ocv_lut palladium_debug_pc_temp_ocv;
+#endif
+
+#ifdef CONFIG_HUAWEI_KERNEL
+static const struct batt_r_id_map batt_r_id_map[] = {
+    {2,    10},
+    {4,    22},
+    {6,    40},
+    {8,    68},
+    {9,    68},
+    {10, 110},
+    {11, 110},
+    {13, 200},
+    {15, 470},
+    {16, 470},
+};
+
+static const struct batt_info_map batt_info_map[] = {
+    {"HB4W1H_Maxell",    &Huawei_HB4W1H_data,     4200},
+    {"HB4W1H_SDI",        &Huawei_HB4W1H_data,	4200},
+    {"HB5V1HV_SANYO",  &Huawei_HB5V1HV_data,    4350},
+    {"HB5V1HV_SDI",  &Huawei_HB5V1HV_SDI_data,    4350},
+    {"HB505076RBC_FMT",  &Huawei_HB505076RBC_FMT_data,    4350},
+    {"HB505076RBC_SWD",  &Huawei_HB505076RBC_SWD_data,    4350},
+};
+
+static int debug_enabled = 0;
+
+#ifdef pr_fmt
+#undef pr_fmt
+#define pr_fmt(fmt)	PM8921_BMS_DEV_NAME " %s: " fmt, __func__
+#endif
+
+#ifdef pr_debug
+#undef pr_debug
+#define pr_debug(fmt, ...) \
+	do{ \
+		if(debug_enabled) \
+		{ \
+			printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__); \
+		} \
+	}while(0); 
+#endif
+
+#endif
 
 static int pm8921_battery_gauge_alarm_notify(struct notifier_block *nb,
 				unsigned long status, void *unused);
@@ -480,6 +540,7 @@ static int pm8921_battery_gauge_alarm_notify(struct notifier_block *nb,
 		 */
 		wake_lock(&the_chip->low_voltage_wake_lock);
 		the_chip->low_voltage_wake_lock_held = 1;
+		the_chip->soc_calc_period = the_chip->low_voltage_calc_ms;
 
 		rc = pm8xxx_batt_alarm_disable(
 				PM8XXX_BATT_ALARM_LOWER_COMPARATOR);
@@ -1723,6 +1784,13 @@ static int charging_adjustments(struct pm8921_bms_chip *chip,
 					ibat_ua);
 	chg_soc = bound_soc(chg_soc);
 
+#ifdef CONFIG_HUAWEI_KERNEL
+	if( chg_soc > MAX_BATTERY_LEVEL )
+	{
+		chg_soc = MAX_BATTERY_LEVEL;
+	}
+#endif
+	
 	/* always report a higher soc */
 	if (chg_soc > chip->prev_chg_soc) {
 		int new_ocv_uv;
@@ -1787,6 +1855,12 @@ static int adjust_soc(struct pm8921_bms_chip *chip, int soc,
 	int m = 0;
 	int rc = 0;
 	int delta_ocv_uv_limit = 0;
+#ifdef CONFIG_HUAWEI_KERNEL
+	static int lower_than_cutoff_v_count = 0;
+	static int adjust_to_cutoff_batt_level_flag = false;
+	int ocv_uv = 0;
+	int rc_uah = 0;
+#endif
 
 	rc = pm8921_bms_get_simultaneous_battery_voltage_and_current(
 							&ibat_ua,
@@ -1814,6 +1888,9 @@ static int adjust_soc(struct pm8921_bms_chip *chip, int soc,
 	}
 
 	if (ibat_ua < 0 && pm8921_is_batfet_closed()) {
+#ifdef CONFIG_HUAWEI_KERNEL
+		adjust_to_cutoff_batt_level_flag = false;
+#endif
 		soc = charging_adjustments(chip, soc, vbat_uv, ibat_ua,
 				batt_temp, chargecycles,
 				fcc_uah, cc_uah, uuc_uah);
@@ -1830,11 +1907,21 @@ static int adjust_soc(struct pm8921_bms_chip *chip, int soc,
 	 * Also don't adjust soc if it is above 90 becuase we might pull it low
 	 * and  cause a bad user experience
 	 */
+#ifdef CONFIG_HUAWEI_KERNEL
+	if (soc_est == soc
+		|| (is_between(45, chip->adjust_soc_low_threshold, soc_est)
+		&& is_between(50, chip->adjust_soc_low_threshold - 5, soc))
+		|| soc >= 90)
+	{
+		goto out_check_cutoff_v;
+	}
+#else
 	if (soc_est == soc
 		|| (is_between(45, chip->adjust_soc_low_threshold, soc_est)
 		&& is_between(50, chip->adjust_soc_low_threshold - 5, soc))
 		|| soc >= 90)
 		goto out;
+#endif
 
 	if (last_soc_est == -EINVAL)
 		last_soc_est = soc;
@@ -1901,6 +1988,47 @@ static int adjust_soc(struct pm8921_bms_chip *chip, int soc,
 		soc_new = 1;
 
 	soc = soc_new;
+
+#ifdef CONFIG_HUAWEI_KERNEL
+out_check_cutoff_v:
+	if((ocv_est_uv  > (chip->v_cutoff  * UV_PER_MV)) && (soc <= CUTOFF_BATTERY_LEVEL)
+		&& (!adjust_to_cutoff_batt_level_flag))
+	{
+		soc = CUTOFF_BATTERY_LEVEL + 1;
+		find_ocv_for_soc(chip, batt_temp, chargecycles,
+				fcc_uah, uuc_uah, cc_uah,
+				soc,
+				&rc_uah, &ocv_uv);
+		chip->last_ocv_uv = ocv_uv;
+		pr_info("adjust to cutoff level + 1\n");
+	}
+	else if(( ocv_est_uv < (chip->v_cutoff * UV_PER_MV) ) && (soc > CUTOFF_BATTERY_LEVEL))
+	{
+		lower_than_cutoff_v_count ++;
+	}
+	else
+	{
+		lower_than_cutoff_v_count = 0;
+	}
+
+	if(lower_than_cutoff_v_count > VOLTAGE_CONFIRM_MAX_COUNTER)
+	{
+		soc = CUTOFF_BATTERY_LEVEL;
+		find_ocv_for_soc(chip, batt_temp, chargecycles,
+				fcc_uah, uuc_uah, cc_uah,
+				soc,
+				&rc_uah, &ocv_uv);
+		chip->last_ocv_uv = ocv_uv + DELTA_ADJUST_CUTOFF_L_V_MV*UV_PER_MV;
+		adjust_to_cutoff_batt_level_flag = true;
+		pr_info("adjust to cutoff level \n");
+	}
+
+	if((true == adjust_to_cutoff_batt_level_flag) && (soc > CUTOFF_BATTERY_LEVEL))
+	{
+		soc = CUTOFF_BATTERY_LEVEL;
+	}
+
+#endif
 
 out:
 	pr_debug("ibat_ua = %d, vbat_uv = %d, ocv_est_uv = %d, pc_est = %d, "
@@ -2447,6 +2575,51 @@ void pm8921_bms_calibrate_hkadc(void)
 	schedule_work(&the_chip->calib_hkadc_work);
 }
 
+#ifdef CONFIG_HUAWEI_KERNEL
+/*============================================================================================
+FUNCTION        set_battery_debug_data
+DESCRIPTION    this function is used to call bms_battery_debug_get_para in order to get battery data
+CALLED BY       pm8921_bms_probe
+RETURN VALUE    TRUE :get data success
+                FALSE:get data failed
+DEPENDENCIES : none
+SIDE EFFECTS : none
+=============================================================================================*/
+static void set_battery_debug_data(struct work_struct *work)
+{
+	struct pm8921_bms_chip *chip = container_of(work,struct pm8921_bms_chip, set_battery_debug.work);
+	battery_debug_data.fcc_temp_lut = &palladium_debug_fcc_temp;
+	battery_debug_data.fcc_sf_lut = &palladium_debug_fcc_sf;
+	battery_debug_data.pc_temp_ocv_lut = &palladium_debug_pc_temp_ocv;
+	battery_debug_data.pc_sf_lut = &palladium_debug_pc_sf;
+	battery_debug_data.rbatt_sf_lut = &palladium_debug_rbatt_sf;
+	if (NULL == chip)
+	{
+		printk("call bms_battery_debug_get_para failed chip is NULL\n");
+	}
+	printk("call bms_battery_debug_get_para\n");
+
+	/* try to get battery data from file ,if success ,changge the battery table data */
+	set_battery_debug_flag = bms_battery_debug_get_para(&battery_debug_data);
+	if(TRUE == set_battery_debug_flag)
+	{
+		chip->fcc = battery_debug_data.fcc;
+		chip->fcc_temp_lut = battery_debug_data.fcc_temp_lut;
+		chip->fcc_sf_lut = battery_debug_data.fcc_sf_lut;
+		chip->pc_temp_ocv_lut = battery_debug_data.pc_temp_ocv_lut;
+		chip->pc_sf_lut = battery_debug_data.pc_sf_lut;
+		chip->rbatt_sf_lut = battery_debug_data.rbatt_sf_lut;
+		chip->default_rbatt_mohm
+			= battery_debug_data.default_rbatt_mohm;
+		chip->delta_rbatt_mohm = battery_debug_data.delta_rbatt_mohm;
+	}
+	else
+	{
+		printk("set_battery_debug_data:failed\n");
+	}
+}
+#endif
+
 int pm8921_bms_get_vsense_avg(int *result)
 {
 	int rc = -EINVAL;
@@ -2833,8 +3006,299 @@ static int64_t read_battery_id(struct pm8921_bms_chip *chip)
 	}
 	pr_debug("batt_id phy = %lld meas = 0x%llx\n", result.physical,
 						result.measurement);
+
+#ifdef CONFIG_HUAWEI_KERNEL
+	return result.physical;
+#else
 	return result.adc_code;
+#endif
 }
+
+#ifdef CONFIG_HUAWEI_KERNEL
+/*============================================================================================
+FUNCTION        get_battery_r_id
+
+DESCRIPTION    This function is called for getting battery r_id from battery v_id
+
+INPUT: int battery v_id
+RETURN VALUE:    
+                    success: battery r_id
+                    fail: -1
+DEPENDENCIES : none
+
+SIDE EFFECTS : none
+
+=============================================================================================*/
+
+static int get_battery_r_id (int battery_v_id)
+{
+    int tablesize = 0;
+    int i = 0;
+    tablesize = ARRAY_SIZE(batt_r_id_map);
+
+    while (i < tablesize) {
+        if (batt_r_id_map[i].batt_v_id == battery_v_id) 
+        {
+            return batt_r_id_map[i].batt_r_id;
+        } 
+        else 
+        {
+            i++;
+        }
+    }
+    return ERR;
+}
+
+/*============================================================================================
+FUNCTION        get_battery_info
+
+DESCRIPTION    This function is called for getting battery information struct address & battery max voltage(mv)
+
+INPUT: char *battery_name
+OUTPUT: struct pm8921_bms_battery_data *battery_data,int *batt_max_voltage_mv
+RETURN VALUE:    
+                    success: 0
+                    fail: -1
+DEPENDENCIES : none
+
+SIDE EFFECTS : none
+
+=============================================================================================*/
+/* modify for 1.7232 baseline upgrade */
+static int get_battery_info (char *battery_name,struct bms_battery_data **battery_data,int *batt_max_voltage_mv)
+{
+    int tablesize = 0;
+    int i = 0;
+    tablesize = ARRAY_SIZE(batt_info_map);
+
+    while (i < tablesize) {
+        if ( !(strcmp(batt_info_map[i].batt_name,battery_name))) 
+        {
+            *battery_data = batt_info_map[i].battery_data;
+            *batt_max_voltage_mv = batt_info_map[i].batt_max_voltage_mv;
+            return 0;
+        } 
+        else 
+        {
+            i++;
+        }
+    }
+    return ERR;
+}
+/*============================================================================================
+FUNCTION        get_batt_name_external
+
+DESCRIPTION    This function is called for getting battery name
+
+INPUT: none
+OUTPUT: char *battery_name
+RETURN VALUE:    
+                    success: 0
+                    fail: -1
+DEPENDENCIES : none
+
+SIDE EFFECTS : none
+
+=============================================================================================*/
+
+int get_batt_name_external(char *battery_name)
+{
+    int64_t battery_id;
+    int battery_v_id;
+    int battery_r_id;
+    int ret = 0;
+
+    battery_id = read_battery_id(the_chip);
+
+    if (battery_id < 0) 
+    {
+        pr_err("cannot read battery id err = %lld\n", battery_id);
+        return ERR;
+    }
+    
+    battery_v_id = (int)battery_id / UV_PER_VID;
+    battery_r_id = get_battery_r_id (battery_v_id);
+    if (battery_id < 0) 
+    {
+        pr_err("cannot get battery R_id \n");
+        return ERR;
+    }
+
+    ret = get_battery_name(battery_r_id,battery_name,16);
+    if(ret < 0)
+    {
+        pr_err("cannot get battery name\n");
+        return ERR;
+    }
+
+    return 0;
+}
+
+/*============================================================================================
+FUNCTION        get_batt_name
+
+DESCRIPTION    This function is called for getting battery name
+
+INPUT: none
+OUTPUT: char *battery_name
+RETURN VALUE:    
+                    success: 0
+                    fail: -1
+DEPENDENCIES : none
+
+SIDE EFFECTS : none
+
+=============================================================================================*/
+
+static int get_batt_name(char *battery_name,struct pm8921_bms_chip *chip)
+{
+    int64_t battery_id;
+    int battery_v_id;
+    int battery_r_id;
+    int ret = 0;
+
+    battery_id = read_battery_id(chip);
+
+    if (battery_id < 0) 
+    {
+        pr_err("cannot read battery id err = %lld\n", battery_id);
+        return ERR;
+    }
+    
+    battery_v_id = (int)battery_id / UV_PER_VID;
+    battery_r_id = get_battery_r_id (battery_v_id);
+    if (battery_r_id < 0) 
+    {
+        pr_err("cannot get battery R_id \n");
+        return ERR;
+    }
+
+    ret = get_battery_name(battery_r_id,battery_name,16);
+    if(ret < 0)
+    {
+        pr_err("cannot get battery name\n");
+        return ERR;
+    }
+
+    return 0;
+}
+
+/*============================================================================================
+FUNCTION        set_battery_data
+
+DESCRIPTION    This function is called for set battery data
+
+INPUT: struct pm8921_bms_chip *chip
+OUTPUT: none
+RETURN VALUE:    
+                    success: 0
+                    fail: -1
+DEPENDENCIES : none
+
+SIDE EFFECTS : none
+
+=============================================================================================*/
+
+static int set_battery_data(struct pm8921_bms_chip *chip)
+{
+    char battery_name[16] = {0};
+    /* modify for 1.7232 baseline upgrade */
+    struct bms_battery_data *battery_data = &Huawei_HB4W1H_data;
+    int batt_max_voltage_mv = MAX_BATTERY_VOLTAGE_4200MV;
+    int ret = 0;
+
+    ret = get_batt_name(battery_name,chip);
+    if(!ret)
+    {
+        ret = get_battery_info(battery_name,&battery_data,&batt_max_voltage_mv);
+    }
+
+    chip->v_cutoff = get_cutoff_v_mv();
+    chip->fcc = battery_data->fcc;
+    chip->fcc_temp_lut = battery_data->fcc_temp_lut;
+    chip->fcc_sf_lut = battery_data->fcc_sf_lut;
+    chip->pc_temp_ocv_lut = battery_data->pc_temp_ocv_lut;
+    chip->pc_sf_lut = battery_data->pc_sf_lut;
+    chip->rbatt_sf_lut = battery_data->rbatt_sf_lut;
+    chip->default_rbatt_mohm = battery_data->default_rbatt_mohm;
+    chip->delta_rbatt_mohm = battery_data->delta_rbatt_mohm;
+    chip->max_voltage_uv = batt_max_voltage_mv * UV_PER_MV;
+
+    return 0;
+}
+
+/*============================================================================================
+FUNCTION        get_batt_max_voltage_mv
+
+DESCRIPTION    This function is called for gettng max voltage(mv)
+
+INPUT: 
+OUTPUT: 
+RETURN VALUE:    
+                    success: max battery voltage
+                    fail: -1
+DEPENDENCIES : none
+
+SIDE EFFECTS : none
+
+=============================================================================================*/
+
+int get_batt_max_voltage_mv(void)
+{
+    if (the_chip)
+    {
+        return (the_chip->max_voltage_uv/UV_PER_MV);
+    }
+    else
+    {
+        return ERR;
+    }
+}
+
+int get_batt_fcc(void)
+{
+    if (the_chip)
+    {
+        return the_chip->fcc;
+    }
+    else
+    {
+        return ERR;
+    }
+}
+
+
+/*============================================================================================
+FUNCTION        set_debug_param
+
+DESCRIPTION     Internal function to enable or disable log function.
+
+INPUT: 
+OUTPUT: 
+RETURN VALUE:    
+                    success: 0
+DEPENDENCIES : none
+
+SIDE EFFECTS : none
+
+=============================================================================================*/
+static int set_debug_param(const char *val, struct kernel_param *kp)
+{
+	int ret;
+
+	ret = param_set_int(val, kp);
+	if (ret) 
+	{
+		pr_err("error setting value %d\n", ret);
+		return ret;
+	}
+	pr_info("set debug param to %d\n", debug_enabled);
+	return 0;
+}
+module_param_call(debug_enable, set_debug_param, param_get_uint,
+					&debug_enabled, 0644);
+
+#else
 
 #define PALLADIUM_ID_MIN	0x7F40
 #define PALLADIUM_ID_MAX	0x7F5A
@@ -2887,7 +3351,7 @@ desay:
 		chip->delta_rbatt_mohm = desay_5200_data.delta_rbatt_mohm;
 		return 0;
 }
-
+#endif
 enum bms_request_operation {
 	CALC_FCC,
 	CALC_PC,
@@ -3255,6 +3719,11 @@ static int __devinit pm8921_bms_probe(struct platform_device *pdev)
 	chip->imax_ua = -EINVAL;
 
 	chip->ignore_shutdown_soc = pdata->ignore_shutdown_soc;
+
+#ifdef CONFIG_HUAWEI_KERNEL
+	chip->batt_id_channel = pdata->bms_cdata.batt_id_channel;
+#endif
+
 	rc = set_battery_data(chip);
 	if (rc) {
 		pr_err("%s bad battery data %d\n", __func__, rc);
@@ -3321,6 +3790,12 @@ static int __devinit pm8921_bms_probe(struct platform_device *pdev)
 		goto free_irqs;
 	}
 	check_initial_ocv(chip);
+
+#ifdef CONFIG_HUAWEI_KERNEL
+	/* star a delay work after 5S later after bms probe to get battery data */
+	INIT_DELAYED_WORK(&chip->set_battery_debug, set_battery_debug_data);
+	schedule_delayed_work(&chip->set_battery_debug, round_jiffies_relative(msecs_to_jiffies(5000)));
+#endif
 
 	/* enable the vbatt reading interrupts for scheduling hkadc calib */
 	pm8921_bms_enable_irq(chip, PM8921_BMS_GOOD_OCV);

@@ -45,7 +45,9 @@
 #include <net/bluetooth/hci_core.h>
 
 #include "hci_uart.h"
-
+#ifdef CONFIG_HUAWEI_KERNEL
+#include <hsad/config_interface.h>
+#endif
 #define VERSION "2.2"
 
 static bool reset = 0;
@@ -595,8 +597,22 @@ static int __init hci_uart_init(void)
 #ifdef CONFIG_BT_HCIUART_ATH3K
 	ath_init();
 #endif
+#ifndef CONFIG_HUAWEI_KERNEL
 #ifdef CONFIG_BT_HCIUART_IBS
 	ibs_init();
+#endif
+#else
+#ifdef CONFIG_BT_HCIUART_IBS
+	if(BT_FM_QUALCOMM_WCN3660 == get_bt_fm_device_type())
+	
+	{
+		ibs_init();
+	}
+	else
+	{
+		printk("hci_uart_init:chip type is %d.\n",get_bt_fm_device_type());
+	}
+#endif
 #endif
 
 	return 0;
@@ -618,10 +634,22 @@ static void __exit hci_uart_exit(void)
 #ifdef CONFIG_BT_HCIUART_ATH3K
 	ath_deinit();
 #endif
+#ifndef CONFIG_HUAWEI_KERNEL
 #ifdef CONFIG_BT_HCIUART_IBS
 	ibs_deinit();
 #endif
-
+#else
+#ifdef CONFIG_BT_HCIUART_IBS
+	if(BT_FM_QUALCOMM_WCN3660 == get_bt_fm_device_type())
+	{
+		ibs_deinit();
+	}
+	else
+	{
+		printk("hci_uart_init:chip type is %d.\n",get_bt_fm_device_type());
+	}
+#endif
+#endif
 	/* Release tty registration of line discipline */
 	if ((err = tty_unregister_ldisc(N_HCI)))
 		BT_ERR("Can't unregister HCI line discipline (%d)", err);

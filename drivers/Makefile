@@ -44,7 +44,7 @@ obj-$(CONFIG_FB_I810)           += video/i810/
 obj-$(CONFIG_FB_INTEL)          += video/intelfb/
 
 obj-$(CONFIG_PARPORT)		+= parport/
-obj-y				+= base/ block/ misc/ mfd/ nfc/
+obj-y				+= base/ block/ misc/ mfd/
 obj-$(CONFIG_NUBUS)		+= nubus/
 obj-y				+= macintosh/
 obj-$(CONFIG_IDE)		+= ide/
@@ -140,5 +140,7 @@ obj-$(CONFIG_PM_DEVFREQ)	+= devfreq/
 
 #MobiCore
 obj-$(CONFIG_MOBICORE_SUPPORT)  += gud/
-
 obj-$(CONFIG_MSM_QDSS)		+= coresight/
+obj-y				+= huawei/
+obj-$(CONFIG_HUAWEI_NFC_PN544) += nfc/
+obj-$(CONFIG_HUAWEI_HW_DEV_DCT) += devdetect/

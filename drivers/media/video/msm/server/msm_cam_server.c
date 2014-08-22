@@ -413,7 +413,7 @@ static int msm_server_control(struct msm_cam_server_dev *server_dev,
 	/* wait event may be interrupted by sugnal,
 	 * in this case -ERESTARTSYS is returned and retry is needed.
 	 * Now we only retry once. */
-	wait_count = 2;
+	wait_count = 4;
 	do {
 		rc = wait_event_interruptible_timeout(queue->wait,
 			!list_empty_careful(&queue->list),
@@ -423,7 +423,7 @@ static int msm_server_control(struct msm_cam_server_dev *server_dev,
 			break;
 		D("%s: wait_event interrupted by signal, remain_count = %d",
 			__func__, wait_count);
-	} while (wait_count > 0);
+	} while (1);
 	D("Waiting is over for config status\n");
 	if (list_empty_careful(&queue->list)) {
 		if (!rc)
@@ -1084,7 +1084,8 @@ static int msm_cam_server_open_session(struct msm_cam_server_dev *ps,
 	 * The number of camera instance should be controlled by the
 	 * resource manager. Currently supporting two active instances
 	 */
-	if (atomic_read(&ps->number_pcam_active) > 1) {
+    /* since our project cannot simultaneously support two camera implement, we just allow one here */
+	if (atomic_read(&ps->number_pcam_active) > 0) {
 		pr_err("%s Cannot have more than two active camera %d\n",
 			__func__, atomic_read(&ps->number_pcam_active));
 		return -EINVAL;

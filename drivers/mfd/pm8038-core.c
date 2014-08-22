@@ -26,6 +26,8 @@
 #include <linux/mfd/pm8xxx/core.h>
 #include <linux/mfd/pm8xxx/regulator.h>
 
+//delete code of enabling nfc clock when power on, change to enable it when nfc need
+
 #define REG_HWREV		0x002  /* PMIC4 revision */
 #define REG_HWREV_2		0x0E8  /* PMIC4 revision 2 */
 
@@ -750,6 +752,7 @@ static int __devinit pm8038_probe(struct platform_device *pdev)
 	int revision;
 	int rc;
 	u8 val;
+//delete code of enabling nfc clock when power on, change to enable it when nfc need
 
 	if (!pdata) {
 		pr_err("missing platform data\n");
@@ -795,6 +798,8 @@ static int __devinit pm8038_probe(struct platform_device *pdev)
 	} else {
 		WARN_ON(version != PM8XXX_VERSION_8038);
 	}
+
+//delete code of enabling nfc clock when power on, change to enable it when nfc need
 
 	/* Log human readable restart reason */
 	rc = msm_ssbi_read(pdev->dev.parent, REG_PM8038_PON_CNTRL_3, &val, 1);

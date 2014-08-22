@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -29,7 +29,10 @@
 #include <mach/hardware.h>
 #include <mach/gpio.h>
 #include <mach/clk.h>
-
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+#include "hw_lcd_common.h"
+#include <linux/fs.h>
+#endif
 #include "msm_fb.h"
 #include "mipi_dsi.h"
 #include "mdp.h"
@@ -37,7 +40,12 @@
 
 u32 dsi_irq;
 u32 esc_byte_ratio;
-
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+static atomic_t mipi_status_flag;
+/*using for show the LCD's status*/
+#define MIPI_DSI_ON  1
+#define MIPI_DSI_OFF 0
+#endif
 static boolean tlmm_settings = FALSE;
 
 static int mipi_dsi_probe(struct platform_device *pdev);
@@ -68,7 +76,10 @@ static int mipi_dsi_off(struct platform_device *pdev)
 	int ret = 0;
 	struct msm_fb_data_type *mfd;
 	struct msm_panel_info *pinfo;
-
+#ifdef CONFIG_HUAWEI_KERNEL
+	struct mipi_panel_info *mipi;
+	unsigned int datamask = 0;
+#endif
 	pr_debug("%s+:\n", __func__);
 
 	mfd = platform_get_drvdata(pdev);
@@ -100,16 +111,51 @@ static int mipi_dsi_off(struct platform_device *pdev)
 				if (MDP_REV_303 != mdp_rev)
 					gpio_free(vsync_gpio);
 			}
+			/*not to send when panel dead*/
+			#ifdef CONFIG_HW_ESD_DETECT
+			if (mfd->is_panel_alive)
+				mipi_dsi_set_tear_off(mfd);
+			#else
 			mipi_dsi_set_tear_off(mfd);
+			#endif
 		}
 	}
 
 	ret = panel_next_off(pdev);
-
-#ifdef CONFIG_MSM_BUS_SCALING
-	mdp_bus_scale_update_request(0);
+/*not to send when panel dead*/
+#ifdef CONFIG_HW_ESD_DETECT
+if (mfd->is_panel_alive)	
+{
 #endif
 
+#ifdef CONFIG_HUAWEI_KERNEL
+	/*in the new baseline,each mipi command transmission will open and close the mipi clock
+	so at this point, the mipi clock has alread closed*/
+	msleep(20);/*qcom suggestion , good for stablity*/
+	mipi_dsi_clk_enable();
+
+	mipi  = &mfd->panel_info.mipi;
+	/* request data line to enter ulps mode */
+	if (mipi->data_lane3)
+		datamask |= 1<<3;
+	if (mipi->data_lane2)
+		datamask |= 1<<2;
+	if (mipi->data_lane1)
+		datamask |= 1<<1;
+	if (mipi->data_lane0)
+		datamask |= 1<<0;
+		
+	MIPI_OUTP(MIPI_DSI_BASE + 0xA8, datamask );
+	mdelay(1);
+	/* request clock line to enter ulps mode */
+	MIPI_OUTP(MIPI_DSI_BASE + 0xA8, datamask|(1<<4));
+	mdelay(1);
+	/*clear potential side effect */
+	MIPI_OUTP(MIPI_DSI_BASE + 0x00A8,(0x0<<0) );
+#endif
+#ifdef CONFIG_HW_ESD_DETECT
+}
+#endif
 	mipi_dsi_clk_disable();
 
 	/* disbale dsi engine */
@@ -127,7 +173,9 @@ static int mipi_dsi_off(struct platform_device *pdev)
 		mutex_unlock(&mfd->dma->ov_mutex);
 	else
 		up(&mfd->dma->mutex);
-
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+	atomic_set(&mipi_status_flag, MIPI_DSI_OFF);
+#endif
 	pr_debug("End of %s ....:\n", __func__);
 
 	return ret;
@@ -146,7 +194,9 @@ static int mipi_dsi_on(struct platform_device *pdev)
 	u32 ystride, bpp, data;
 	u32 dummy_xres, dummy_yres;
 	int target_type = 0;
-
+#ifdef CONFIG_HUAWEI_KERNEL
+	unsigned int datamask = 0;
+#endif
 	pr_debug("%s+:\n", __func__);
 
 	mfd = platform_get_drvdata(pdev);
@@ -258,7 +308,32 @@ static int mipi_dsi_on(struct platform_device *pdev)
 		mutex_lock(&mfd->dma->ov_mutex);
 	else
 		down(&mfd->dma->mutex);
-
+/*not to send when panel dead*/
+#ifdef CONFIG_HW_ESD_DETECT
+if (mfd->is_panel_alive)	
+{
+#endif
+#ifdef CONFIG_HUAWEI_KERNEL
+	/*when here there is a wrong sequence bofore ,so add 5 ms hope lcd panel can enter the right mode */
+	mdelay(5);
+	/* request data line and clock line to exit the ulps mode */
+	if (mipi->data_lane3)
+		datamask |= 1<<11;
+	if (mipi->data_lane2)
+		datamask |= 1<<10;
+	if (mipi->data_lane1)
+		datamask |= 1<<9;
+	if (mipi->data_lane0)
+		datamask |= 1<<8;
+	MIPI_OUTP(MIPI_DSI_BASE + 0xA8, datamask | (1<<12));
+	/* It is the mipi request ,at least 1 ms*/
+	mdelay(2);
+	/*absolutely exit the ulps mode */
+	MIPI_OUTP(MIPI_DSI_BASE + 0xA8, 0);
+#endif
+#ifdef CONFIG_HW_ESD_DETECT
+}
+#endif
 	ret = panel_next_on(pdev);
 
 	mipi_dsi_op_mode_config(mipi->mode);
@@ -306,28 +381,132 @@ static int mipi_dsi_on(struct platform_device *pdev)
 					}
 				}
 			}
+			/*not to send when panel dead*/
+			#ifdef CONFIG_HW_ESD_DETECT
+			if (mfd->is_panel_alive)
+				mipi_dsi_set_tear_on(mfd);
+			#else
 			mipi_dsi_set_tear_on(mfd);
+			#endif
 		}
 		mipi_dsi_clk_disable();
 		mipi_dsi_ahb_ctrl(0);
 		mipi_dsi_unprepare_clocks();
 	}
 
-#ifdef CONFIG_MSM_BUS_SCALING
-	mdp_bus_scale_update_request(2);
-#endif
-
 	if (mdp_rev >= MDP_REV_41)
 		mutex_unlock(&mfd->dma->ov_mutex);
 	else
 		up(&mfd->dma->mutex);
-
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+	atomic_set(&mipi_status_flag, MIPI_DSI_ON);
+#endif
 	pr_debug("End of %s....:\n", __func__);
 
 	return ret;
 }
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+static int length = 0;
+/*those codes is reference form mipi_novatek.c */
+static char mipi_operate_id[2] = {0xD1, 0x00}; /* DTYPE_DCS_READ */
 
+static struct dsi_cmd_desc mipi_operate_cmd = {
+	DTYPE_DCS_READ, 1, 0, 1, 5, sizeof(mipi_operate_id), mipi_operate_id};
+/*****************************************
+  @func_name:  mipi_operate_store_cb
+  @para: u32 *data
+  @func: Call_back from mipi_dsi_cmdlist_rx,
+        and print the value of register;
+******************************************/
+static void mipi_operate_store_cb(char *data)
+{
+	char *lp = NULL;
+	int i = 0;
+	lp = data;
+	for(i = 0;i < length;i ++)
+	{
+		if(lp != NULL)
+		{
+			printk("%s: register_value=0x%02x\n",__func__, *lp);
+			lp ++;
+		}
+	}
+}
+/*****************************************
+  @func_name:  mipi_operate_store
+  @para: dev,attr,buf,count
+  @func: react the echo action,get the buf and parse it,
+         the command shoule be like the sample as below:
+         "echo "{0xD1,4,4}" > mipi_operate"
+         and the cat kmsg;
+  @path of point: /sys/devices/platform/mipi_dsi.1
+  @warning: The path below is based on the platform_device of mipi_dsi
+           ,so it may change.
+  @return count
+  @warning: this fuction should be use when LCD is working
+******************************************/
+static ssize_t mipi_operate_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned int reg = 0;
+	struct dcs_cmd_req cmdreq;
+	int datatype = 0;
+	int value = 0;
+	if(MIPI_DSI_OFF == atomic_read(&mipi_status_flag))
+	{
+		printk("%s,MIPI bus is close,please wake up your phone first.\n",__func__);
+		return count;
+	}
+	if (sscanf(buf, "{0x%x,%d,%d}",&reg,&value,&length) == 0)
+	{
+		printk("%s,Get parameters Failed\n",__func__);
+		return count;
+	}
+	printk("Get parameters 0x%x,%d,%d\n",reg,value,length);
+	if (MIPI_DCS_COMMAND == value)
+	{
+		datatype = DTYPE_DCS_READ;
+	}
+	else if (MIPI_GEN_COMMAND == value)
+	{
+		datatype = DTYPE_GEN_READ;
+	}
+	else
+	{
+		printk("%s, Unknown command\n", __func__);
+		return count;
+	}
+	/*those codes is reference form mipi_novatek.c */
+	mipi_operate_cmd.dtype = datatype;
+	mipi_operate_cmd.payload = (char *)&reg;
+	cmdreq.cmds = &mipi_operate_cmd;
+	cmdreq.cmds_cnt = 1;
+	/*Qual Baseline Update,avoid backlight problem*/
+	cmdreq.flags = CMD_REQ_RX | CMD_REQ_COMMIT | CMD_CLK_CTRL;
+	cmdreq.rlen = length;
+	cmdreq.cb = NULL; 
+	cmdreq.cb_hw =  mipi_operate_store_cb;/* call back reconstruct by hw*/
+	mipi_dsi_cmdlist_put(&cmdreq);
+	/*
+	 * blocked here, untill call back called
+	 */
 
+	return count;
+}
+
+static DEVICE_ATTR(mipi_operate, S_IRUGO | S_IWUSR,NULL,
+		mipi_operate_store);
+
+static struct attribute *mipi_operate_attributes[] = {
+	&dev_attr_mipi_operate.attr,
+	NULL
+};
+
+static const struct attribute_group mipi_operate_attr_group= {
+	.attrs = mipi_operate_attributes,
+};
+
+#endif
 static int mipi_dsi_resource_initialized;
 
 static int mipi_dsi_probe(struct platform_device *pdev)
@@ -339,6 +518,9 @@ static int mipi_dsi_probe(struct platform_device *pdev)
 	struct platform_device *mdp_dev = NULL;
 	struct msm_fb_panel_data *pdata = NULL;
 	int rc;
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+	int ret =0;
+#endif
 	uint8 lanes = 0, bpp;
 	uint32 h_period, v_period, dsi_pclk_rate;
 
@@ -380,7 +562,13 @@ static int mipi_dsi_probe(struct platform_device *pdev)
 		}
 
 		disable_irq(dsi_irq);
-
+	#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+		ret = sysfs_create_group(&pdev->dev.kobj, &mipi_operate_attr_group);
+		if (ret) {
+			printk("%s, sysfs_create_group failed\n", __func__);
+		}
+		atomic_set(&mipi_status_flag, MIPI_DSI_OFF);
+	#endif
 		if (mdp_rev == MDP_REV_42 && mipi_dsi_pdata &&
 			mipi_dsi_pdata->target_type == 1) {
 			/* Target type is 1 for device with (De)serializer

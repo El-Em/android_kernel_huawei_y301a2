@@ -312,11 +312,8 @@ int msm_camera_enable_vreg(struct device *dev, struct camera_vreg_t *cam_vreg,
 					__func__, cam_vreg[j].reg_name);
 				goto disable_vreg;
 			}
-			if (cam_vreg[j].delay > 20)
-				msleep(cam_vreg[j].delay);
-			else if (cam_vreg[j].delay)
-				usleep_range(cam_vreg[j].delay * 1000,
-					(cam_vreg[j].delay * 1000) + 1000);
+			if(cam_vreg[j].delay)
+				udelay(cam_vreg[j].delay);
 		}
 	} else {
 		for (i = num_vreg_seq-1; i >= 0; i--) {
@@ -327,11 +324,8 @@ int msm_camera_enable_vreg(struct device *dev, struct camera_vreg_t *cam_vreg,
 			} else
 				j = i;
 			regulator_disable(reg_ptr[j]);
-			if (cam_vreg[j].delay > 20)
-				msleep(cam_vreg[j].delay);
-			else if (cam_vreg[j].delay)
-				usleep_range(cam_vreg[j].delay * 1000,
-					(cam_vreg[j].delay * 1000) + 1000);
+		if(cam_vreg[j].delay)
+			udelay(cam_vreg[j].delay);
 		}
 	}
 	return rc;
@@ -380,7 +374,7 @@ static int config_gpio_table(struct msm_camera_gpio_conf *gpio)
 int msm_camera_request_gpio_table(struct msm_camera_sensor_info *sinfo,
 	int gpio_en)
 {
-	int rc = 0;
+	int rc = 0,i;
 	struct msm_camera_gpio_conf *gpio_conf =
 		sinfo->sensor_platform_info->gpio_conf;
 
@@ -411,7 +405,8 @@ int msm_camera_request_gpio_table(struct msm_camera_sensor_info *sinfo,
 			}
 		}
 		gpio_ref_count++;
-		if (gpio_conf->cam_gpio_req_tbl_size) {
+		if(! sinfo->standby_is_supported || ! sinfo->standby_mode){
+			if (gpio_conf->cam_gpio_req_tbl_size) {
 			rc = gpio_request_array(gpio_conf->cam_gpio_req_tbl,
 				gpio_conf->cam_gpio_req_tbl_size);
 			if (rc < 0) {
@@ -420,19 +415,57 @@ int msm_camera_request_gpio_table(struct msm_camera_sensor_info *sinfo,
 				gpio_free_array(gpio_conf->cam_gpio_common_tbl,
 					gpio_conf->cam_gpio_common_tbl_size);
 				return rc;
+				}
 			}
-		}
+			}else{
+			 for(i = 0; i < gpio_conf->cam_gpio_req_tbl_size; i++, gpio_conf->cam_gpio_req_tbl++)
+			 	{
+			 	if(sinfo->sensor_pwd == gpio_conf->cam_gpio_req_tbl->gpio)
+					{
+					gpio_request_one(gpio_conf->cam_gpio_req_tbl->gpio, 
+						gpio_conf->cam_gpio_req_tbl->flags, gpio_conf->cam_gpio_req_tbl->label);
+					break;
+				}
+				}			 
+			}
+		if (gpio_conf->cam_gpio_req_init_tbl_size) {
+			for (i = 0; i < gpio_conf->cam_gpio_req_init_tbl_size; i++) {
+				if(! sinfo->standby_is_supported  || ! sinfo->standby_mode){
+					gpio_set_value_cansleep(
+						gpio_conf->cam_gpio_req_init_tbl[i].gpio,
+						gpio_conf->cam_gpio_req_init_tbl[i].flags);
+					usleep_range(gpio_conf->cam_gpio_req_init_tbl[i].delay,
+						gpio_conf->cam_gpio_req_init_tbl[i].delay + 1000);
+					}
+				else{
+					if(sinfo->sensor_pwd == gpio_conf->cam_gpio_req_init_tbl[i].gpio)
+					 	{
+					 	
+					 	gpio_set_value_cansleep(
+							gpio_conf->cam_gpio_req_init_tbl[i].gpio,
+							gpio_conf->cam_gpio_req_init_tbl[i].flags);
+						usleep_range(gpio_conf->cam_gpio_req_init_tbl[i].delay,
+							gpio_conf->cam_gpio_req_init_tbl[i].delay + 1000);
+						break;
+						}
+					}
+				}
+			}
 	} else {
 		gpio_ref_count--;
-		gpio_free_array(gpio_conf->cam_gpio_req_tbl,
+		if(! sinfo->standby_is_supported ||  ! sinfo->standby_mode){
+			gpio_free_array(gpio_conf->cam_gpio_req_tbl,
 				gpio_conf->cam_gpio_req_tbl_size);
+			}else {
+			  gpio_free(sinfo->sensor_pwd);   
+			}
+		
 		if (!gpio_conf->gpio_no_mux && !gpio_ref_count)
 			gpio_free_array(gpio_conf->cam_gpio_common_tbl,
 				gpio_conf->cam_gpio_common_tbl_size);
 	}
 	return rc;
 }
-
 int msm_camera_config_gpio_table(struct msm_camera_sensor_info *sinfo,
 	int gpio_en)
 {
@@ -442,23 +475,63 @@ int msm_camera_config_gpio_table(struct msm_camera_sensor_info *sinfo,
 
 	if (gpio_en) {
 		for (i = 0; i < gpio_conf->cam_gpio_set_tbl_size; i++) {
+			if(!sinfo->standby_is_supported ||! sinfo->standby_mode){
 			gpio_set_value_cansleep(
 				gpio_conf->cam_gpio_set_tbl[i].gpio,
 				gpio_conf->cam_gpio_set_tbl[i].flags);
 			usleep_range(gpio_conf->cam_gpio_set_tbl[i].delay,
 				gpio_conf->cam_gpio_set_tbl[i].delay + 1000);
+				}
+			else {
+				 if(sinfo->sensor_pwd == gpio_conf->cam_gpio_set_tbl[i].gpio)
+				 	{
+				 	gpio_set_value_cansleep(
+						gpio_conf->cam_gpio_set_tbl[i].gpio,
+						gpio_conf->cam_gpio_set_tbl[i].flags);
+					usleep_range(gpio_conf->cam_gpio_set_tbl[i].delay,
+						gpio_conf->cam_gpio_set_tbl[i].delay + 1000);
+					break;
+					}
+				}
 		}
 	} else {
-		for (i = gpio_conf->cam_gpio_set_tbl_size - 1; i >= 0; i--) {
-			if (gpio_conf->cam_gpio_set_tbl[i].flags)
-				gpio_set_value_cansleep(
-					gpio_conf->cam_gpio_set_tbl[i].gpio,
-					GPIOF_OUT_INIT_LOW);
-		}
+		if(gpio_conf->cam_gpio_config_tbl_power_down){
+			for (i = 0; i < gpio_conf->cam_gpio_config_tbl_power_down_size; i++) {
+				if(!sinfo->standby_is_supported || ! sinfo->standby_mode)
+				{
+					gpio_set_value_cansleep(
+						gpio_conf->cam_gpio_config_tbl_power_down[i].gpio,
+						gpio_conf->cam_gpio_config_tbl_power_down[i].flags);
+					usleep_range(gpio_conf->cam_gpio_config_tbl_power_down[i].delay,
+						     gpio_conf->cam_gpio_config_tbl_power_down[i].delay + 1000);
+				}
+				else
+				{
+					if(sinfo->sensor_pwd == gpio_conf->cam_gpio_config_tbl_power_down[i].gpio)
+					{
+						gpio_set_value_cansleep(
+							gpio_conf->cam_gpio_config_tbl_power_down[i].gpio,
+							gpio_conf->cam_gpio_config_tbl_power_down[i].flags);
+						usleep_range(gpio_conf->cam_gpio_config_tbl_power_down[i].delay,
+							     gpio_conf->cam_gpio_config_tbl_power_down[i].delay + 1000);
+						break;
+					}
+				}
+			}
+			
+			}
+			else {
+				for (i = gpio_conf->cam_gpio_set_tbl_size - 1; i >= 0; i--) {
+					if (gpio_conf->cam_gpio_set_tbl[i].flags){
+						gpio_set_value_cansleep(
+							gpio_conf->cam_gpio_set_tbl[i].gpio,
+							GPIOF_OUT_INIT_LOW);
+						}
+					}
+			}
 	}
 	return rc;
 }
-
 void msm_camera_bus_scale_cfg(uint32_t bus_perf_client,
 		enum msm_bus_perf_setting perf_setting)
 {

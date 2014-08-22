@@ -30,6 +30,7 @@
 #include <sound/tlv.h>
 #include "msm-pcm-routing.h"
 #include "qdsp6/q6voice.h"
+#include <hsad/config_interface.h>
 
 struct msm_pcm_routing_bdai_data {
 	u16 port_id; /* AFE port ID */
@@ -787,7 +788,15 @@ static int msm_routing_get_fm_vol_mixer(struct snd_kcontrol *kcontrol,
 static int msm_routing_set_fm_vol_mixer(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	afe_loopback_gain(INT_FM_TX , ucontrol->value.integer.value[0]);
+	/* Make broadcom FM can control volume */
+	int fm_type = FM_NVALID;
+	fm_type = get_audio_fm_type();
+	
+	if(FM_BROADCOM == fm_type) {
+		afe_loopback_gain(MI2S_TX , ucontrol->value.integer.value[0]);
+	} else {
+		afe_loopback_gain(INT_FM_TX , ucontrol->value.integer.value[0]);
+	}
 
 	msm_route_fm_vol_control = ucontrol->value.integer.value[0];
 
@@ -1787,6 +1796,10 @@ static const struct snd_kcontrol_new afe_pcm_rx_port_mixer_controls[] = {
 	SOC_SINGLE_EXT("SLIM_1_TX", MSM_BACKEND_DAI_AFE_PCM_RX,
 	MSM_BACKEND_DAI_SLIMBUS_1_TX, 1, 0, msm_routing_get_port_mixer,
 	msm_routing_put_port_mixer),
+	/* Fix the issue of FM no sound by BT headset */
+	SOC_SINGLE_EXT("MI2S_TX", MSM_BACKEND_DAI_AFE_PCM_RX,
+	MSM_BACKEND_DAI_MI2S_TX, 1, 0, msm_routing_get_port_mixer,
+	msm_routing_put_port_mixer),
 };
 
 
@@ -2525,6 +2538,8 @@ static const struct snd_soc_dapm_route intercon[] = {
 	{"SLIMBUS_0_RX", NULL, "SLIMBUS_0_RX Port Mixer"},
 	{"AFE_PCM_RX Port Mixer", "INTERNAL_FM_TX", "INT_FM_TX"},
 	{"AFE_PCM_RX Port Mixer", "SLIM_1_TX", "SLIMBUS_1_TX"},
+	/* Fix the issue of FM no sound by BT headset */
+	{"AFE_PCM_RX Port Mixer", "MI2S_TX", "MI2S_TX"},
 	{"PCM_RX", NULL, "AFE_PCM_RX Port Mixer"},
 
 	{"AUXPCM_RX Port Mixer", "AUX_PCM_UL_TX", "AUX_PCM_TX"},

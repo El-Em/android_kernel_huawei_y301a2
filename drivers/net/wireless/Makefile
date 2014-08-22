@@ -66,3 +66,6 @@ obj-$(CONFIG_BRCMSMAC)	+= brcm80211/
 
 obj-$(CONFIG_LIBRA_SDIOIF)	+= libra/
 obj-$(CONFIG_WCNSS_CORE)	+= wcnss/
+
+obj-y	                += wlan_feature.o
+obj-y	                += nfc_feature.o

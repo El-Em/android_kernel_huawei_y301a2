@@ -336,7 +336,25 @@ static ssize_t regulator_uV_show(struct device *dev,
 
 	return ret;
 }
+
+#if (defined(FEATURE_HUAWEI_FACTORY_MODE) || defined(CONFIG_HUAWEI_REGULATOR_VOLTAGE_SET))
+static ssize_t regulator_uV_store(struct device *dev, struct device_attribute *attr,
+			const char *buf, size_t count)
+{
+	struct regulator_dev *rdev = dev_get_drvdata(dev);
+	int min_uV = 0;
+	int max_uV = 0 ; 
+
+	mutex_lock(&rdev->mutex);
+	sscanf(buf, "%d,%d", &min_uV,&max_uV);
+	_regulator_do_set_voltage(rdev,min_uV,max_uV);
+	mutex_unlock(&rdev->mutex);
+	return count;
+}
+static DEVICE_ATTR(microvolts, 0644, regulator_uV_show, regulator_uV_store);
+#else
 static DEVICE_ATTR(microvolts, 0444, regulator_uV_show, NULL);
+#endif
 
 static ssize_t regulator_uA_show(struct device *dev,
 				struct device_attribute *attr, char *buf)

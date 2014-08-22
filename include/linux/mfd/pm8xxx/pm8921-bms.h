@@ -18,6 +18,18 @@
 
 #define PM8921_BMS_DEV_NAME	"pm8921-bms"
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#define ERR  -1
+
+#define UV_PER_MV 1000
+
+#define UV_PER_VID 100000
+/*delete a unused MACRO*/
+#define CUTOFF_BATTERY_LEVEL 2
+#define VOLTAGE_CONFIRM_MAX_COUNTER    3
+#define DELTA_ADJUST_CUTOFF_L_V_MV   20
+#define MAX_BATTERY_LEVEL 100
+#endif
 
 struct pm8xxx_bms_core_data {
 	unsigned int	batt_temp_channel;
@@ -67,7 +79,36 @@ struct pm8921_bms_platform_data {
 	int				ocv_dis_low_soc;
 };
 
+#ifdef CONFIG_HUAWEI_KERNEL
+/*battery capacity*/
+typedef enum
+{
+    HB4W1H_Maxell = 0,
+    HB4W1H_SDI,
+    HB5V1HV_SANYO,
+    BATTERY_CAPACITY_DEFAULT = 0xFF,
+}hw_battery_name;
+
+struct batt_r_id_map {
+    int    batt_v_id;
+    int    batt_r_id;
+};
+/* modify for 1.7232 baseline upgrade */
+struct batt_info_map {
+    char batt_name[16];
+    struct bms_battery_data *battery_data;
+    int batt_max_voltage_mv;
+};
+#endif
+
 #if defined(CONFIG_PM8921_BMS) || defined(CONFIG_PM8921_BMS_MODULE)
+#ifdef CONFIG_HUAWEI_KERNEL
+extern struct bms_battery_data  Huawei_HB4W1H_data;
+extern struct bms_battery_data  Huawei_HB5V1HV_data;
+extern struct bms_battery_data  Huawei_HB5V1HV_SDI_data;
+extern struct bms_battery_data  Huawei_HB505076RBC_FMT_data;
+extern struct bms_battery_data  Huawei_HB505076RBC_SWD_data;
+#endif
 /**
  * pm8921_bms_get_vsense_avg - return the voltage across the sense
  *				resitor in microvolts
@@ -143,6 +184,12 @@ int pm8921_bms_get_current_max(void);
  *					soc stored in a coincell backed register
  */
 void pm8921_bms_invalidate_shutdown_soc(void);
+#ifdef CONFIG_HUAWEI_KERNEL
+int get_batt_max_voltage_mv(void);
+int get_batt_name_external(char *battery_name);
+int get_batt_fcc(void);
+#endif
+
 
 /**
  * pm8921_bms_cc_uah -	function to get the coulomb counter based charge. Note

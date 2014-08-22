@@ -655,7 +655,7 @@ static void __init reserve_ion_memory(void)
 	/* Since the fixed area may be carved out of lowmem,
 	 * make sure the length is a multiple of 1M.
 	 */
-	fixed_size = (fixed_size + MSM_MM_FW_SIZE + SECTION_SIZE - 1)
+	fixed_size = (fixed_size + HOLE_SIZE + SECTION_SIZE - 1)
 		& SECTION_MASK;
 	msm8960_reserve_fixed_area(fixed_size);
 
@@ -1116,6 +1116,27 @@ static struct msm_bus_vectors qseecom_enable_sfpb_vectors[] = {
 	},
 };
 
+static struct msm_bus_vectors qseecom_enable_dfab_sfpb_vectors[] = {
+	{
+		.src = MSM_BUS_MASTER_SPS,
+		.dst = MSM_BUS_SLAVE_EBI_CH0,
+		.ib = (492 * 8) * 1000000UL,
+		.ab = (492 * 8) *  100000UL,
+	},
+	{
+		.src = MSM_BUS_MASTER_SPS,
+		.dst = MSM_BUS_SLAVE_SPS,
+		.ib = (492 * 8) * 1000000UL,
+		.ab = (492 * 8) * 100000UL,
+	},
+	{
+		.src = MSM_BUS_MASTER_SPDM,
+		.dst = MSM_BUS_SLAVE_SPDM,
+		.ib = (64 * 8) * 1000000UL,
+		.ab = (64 * 8) *  100000UL,
+	},
+};
+
 static struct msm_bus_paths qseecom_hw_bus_scale_usecases[] = {
 	{
 		ARRAY_SIZE(qseecom_clks_init_vectors),
@@ -1128,6 +1149,10 @@ static struct msm_bus_paths qseecom_hw_bus_scale_usecases[] = {
 	{
 		ARRAY_SIZE(qseecom_enable_sfpb_vectors),
 		qseecom_enable_sfpb_vectors,
+	},
+	{
+		ARRAY_SIZE(qseecom_enable_dfab_sfpb_vectors),
+		qseecom_enable_dfab_sfpb_vectors,
 	},
 };
 
@@ -2839,6 +2864,7 @@ static struct platform_device *common_devices[] __initdata = {
 	&msm8960_cache_dump_device,
 	&msm8960_iommu_domain_device,
 	&msm_tsens_device,
+	&msm8960_pc_cntr,
 };
 
 static struct platform_device *cdp_devices[] __initdata = {

@@ -49,6 +49,17 @@
 #define MFD_KEY  0x11161126
 #define MSM_FB_MAX_DEV_LIST 32
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+#define DISPLAY_BREAK   " "
+#define DISPLAY_START   "#"
+#define DISPLAY_RGB_RED  "R:"
+#define DISPLAY_RGB_GRE  "G:"
+#define DISPLAY_RGB_BLU  "B:"
+#define DISPLAY_MAX_DEBUG_BUF  (10)
+#define DISPLAY_MAX_BUF_LENGTH  (200)
+#define RECORD_BUFFER_SIZE (1024*50)
+#define RECORD_BUFFER_THRESHOLD (1024*45)
+#endif
 struct disp_info_type_suspend {
 	boolean op_enable;
 	boolean sw_refreshing_enable;
@@ -81,6 +92,11 @@ struct msm_fb_data_type {
 	struct fb_info *fbi;
 
 	struct delayed_work backlight_worker;
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	struct delayed_work panel_live_status;
+	struct work_struct display_reset;
+	#endif
 	boolean op_enable;
 	uint32 fb_imgType;
 	boolean sw_currently_refreshing;
@@ -114,6 +130,8 @@ struct msm_fb_data_type {
 
 	struct timer_list vsync_resync_timer;
 	boolean vsync_handler_pending;
+	/*add qcom patch to solve esd issue*/
+	boolean is_panel_alive;
 	struct work_struct vsync_resync_worker;
 
 	ktime_t last_vsync_timetick;
@@ -126,6 +144,12 @@ struct msm_fb_data_type {
 	__u32 channel_irq;
 
 	struct mdp_dma_data *dma;
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	void (*wait4dmap) (struct msm_fb_data_type *mfd);
+	struct device_attribute dev_attr2;
+	struct device_attribute dev_attr3;
+	#endif
 	struct device_attribute dev_attr;
 	void (*dma_fnc) (struct msm_fb_data_type *mfd);
 	int (*cursor_update) (struct fb_info *info,
@@ -196,6 +220,11 @@ struct msm_fb_data_type {
 	unsigned char *copy_splash_phys;
 	void *cpu_pm_hdl;
 	int vsync_sysfs_created;
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	int panel_status_sysfs_created;
+	bool use_sw_esd_sysfs_created;
+	#endif
 };
 
 struct dentry *msm_fb_get_debugfs_root(void);

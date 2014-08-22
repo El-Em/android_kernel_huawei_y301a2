@@ -39,6 +39,8 @@ static int vnode_count;
 module_param(msm_camera_v4l2_nr, uint, 0644);
 MODULE_PARM_DESC(msm_camera_v4l2_nr, "videoX start number, -1 is autodetect");
 
+
+
 /* callback function from all subdevices of a msm_cam_v4l2_device */
 static void msm_cam_v4l2_subdev_notify(struct v4l2_subdev *sd,
 				unsigned int notification, void *arg)
@@ -1233,6 +1235,10 @@ long msm_v4l2_evt_notify(struct msm_cam_media_controller *mctl,
 	v4l2_ev = evt_payload.evt;
 	v4l2_ev.id = 0;
 	pcam = mctl->pcam_ptr;
+	if(!pcam) {
+		pr_err("%s: pcam is NULL\n", __func__);
+		return -EINVAL;
+	}
 	ktime_get_ts(&v4l2_ev.timestamp);
 	if (evt_payload.payload_length > 0 && evt_payload.payload != NULL) {
 		mutex_lock(&pcam->event_lock);

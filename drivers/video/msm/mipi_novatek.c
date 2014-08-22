@@ -543,6 +543,11 @@ static int __devinit mipi_novatek_lcd_probe(struct platform_device *pdev)
 	return 0;
 }
 
+/*add qcom patch to solve esd issue*/
+static int mipi_NT35510_check_live_status(struct msm_fb_data_type *mfd)
+{
+	return mipi_dsi_wait_for_bta_ack();
+}
 static struct platform_driver this_driver = {
 	.probe  = mipi_novatek_lcd_probe,
 	.driver = {
@@ -554,6 +559,8 @@ static struct msm_fb_panel_data novatek_panel_data = {
 	.on		= mipi_novatek_lcd_on,
 	.off		= mipi_novatek_lcd_off,
 	.set_backlight = mipi_novatek_set_backlight,
+	/*add qcom patch to solve esd issue*/
+	.check_live_status = mipi_NT35510_check_live_status,
 };
 
 static ssize_t mipi_dsi_3d_barrier_read(struct device *dev,

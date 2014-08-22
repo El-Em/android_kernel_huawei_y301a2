@@ -151,6 +151,7 @@ config TOUCHSCREEN_CY8CTMG110
 	tristate "cy8ctmg110 touchscreen"
 	depends on I2C
 	depends on GPIOLIB
+
 	help
 	  Say Y here if you have a cy8ctmg110 capacitive touchscreen on
 	  an AAVA device.
@@ -946,4 +947,215 @@ config TOUCHSCREEN_FT5X06
          To compile this driver as a module, choose M here: the
          module will be called ft5x06_ts.
 
+config HUAWEI_FEATURE_RMI_TOUCH
+       tristate "Synaptics touchscreens"
+       depends on I2C
+       help
+         Say Y here if you have a Synaptics touchscreen.
+	 Synaptics controllers are multi touch controllers which can
+	 report 5 touches at a time.
+
+         If unsure, say N.
+
+         To compile this driver as a module, choose M here: the
+         module will be called synaptics.
+
+
+config HUAWEI_CYPRESS_TOUCHSCREEN
+       tristate "Cypress cyttsp3-i2c touchscreens"
+       depends on I2C
+       default n
+       help
+         Say Y here if you have a Cypress cyttsp3-i2c touchscreen.
+
+         If unsure, say N.
+
+         To compile this driver as a module, choose M here
+config TOUCHSCREEN_CYPRESS_CYTTSP4
+	tristate "Cypress TrueTouch Gen4 Touchscreen Driver"
+	default n
+	select CYPRESS_CYTTSP4_BUS
+	select TOUCHSCREEN_CYPRESS_CYTTSP4_I2C
+	select TOUCHSCREEN_CYPRESS_CYTTSP4_MT_B
+	help
+	  Core driver for Cypress TrueTouch(tm) Standard Product
+	  Geneartion4 touchscreen controllers.
+	  Say Y here if you have a Cypress Gen4 touchscreen.
+	  If unsure, say N.
+	  To compile this driver as a module, choose M here.
+
+config CYPRESS_CYTTSP4_BUS
+	bool "Cypress TTSP core bus"
+	default n
+	help
+	  This option enables support Cypress TTSP core bus.
+	  This support is needed for various device and drivers
+	  using Cypress TrueTouch(TM) Standard Product
+	  protocol.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_I2C
+	tristate "Cypress TrueTouch Gen4 I2C"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	select I2C
+	default n
+	help
+	  Cypress TrueTouch(tm) Standard Product Generation4
+	  I2C bus interface.
+	  Say Y here to enable I2C bus interface to TTSP
+	  touchscreen controller.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_INCLUDE_FW
+	bool "FW upgrade from header file"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	default n
+	help
+	  Include Cypress TrueTouch(tm) Standard Product
+	  Generation4 device Firmware into driver.
+	  Need proper header file for this.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_USE_FW_BIN_FILE
+	bool "FW upgrade from binary file"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	default n
+	help
+	  Include Cypress TrueTouch(tm) Standard Product
+	  Generation4 device Firmware into kernel itself.
+	  This should be enabled for manual FW upgrade.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_AUTO_LOAD_TOUCH_PARAMS
+	bool "Auto FW upgrade if TT Configuration modified"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	default n
+	help
+	  Does Cypress TrueTouch(tm) Standard Product
+	  Generation4 device Firmware TrueTouch Configuration
+	  check. If configuration updated, does a Firmware
+	  upgrade.
+
+	  Need proper header file for this.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_DEBUG
+	bool "Enable debug output"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	default n
+	help
+	  Enable Debug output for Cypress TrueTouch(tm)
+	  Standard Product Generation4 drivers set.
+
+	  Say Y here to enable debug output.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_VDEBUG
+	bool "Enable verbose debug output"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4_DEBUG
+	default n
+	help
+	  Enable Verbose Debug output for Cypress TrueTouch(tm)
+	  Standard Product Generation4 drivers set.
+
+	  Say Y here to enable verbose debug output.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_PLATFORM_FW_UPGRADE
+	bool "FW upgrade from header file"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4_LOADER
+	default n
+	help
+	  Include Cypress TrueTouch(tm) Standard Product
+	  Generation4 device Firmware into driver.
+
+	  Need proper header file for this.
+config TOUCHSCREEN_CYPRESS_CYTTSP4_BINARY_FW_UPGRADE
+	bool "FW upgrade from binary file"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4_LOADER
+	default n
+	help
+	  Include Cypress TrueTouch(tm) Standard Product
+	  Generation4 device Firmware into kernel itself.
+	  This should be enabled for manual FW upgrade.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_PLATFORM_TTCONFIG_UPGRADE
+	bool "TT Configuration upgrade from header file"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4_LOADER
+	default n
+	help
+	  Include Cypress TrueTouch(tm) Standard Product
+	  Generation4 device TrueTouch Configuration into
+	  kernel itself.
+	  Need proper header file for this.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_MANUAL_TTCONFIG_UPGRADE
+	bool "TT Configuration upgrade via SysFs"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4_LOADER
+	default n
+	help
+	  Provides a SysFs interface to upgrade TrueTouch
+	  Configuration with a binary configuration file.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_SPI
+	tristate "Cypress TrueTouch Gen4 SPI"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	select SPI
+	default n
+	help
+	  Cypress TrueTouch(tm) Standard Product Generation4
+	  SPI bus interface.
+	  Say Y here to enable SPI bus interface to TTSP
+	  touchscreen controller.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_MT_A
+	tristate "Cypress TrueTouch Gen4 MultiTouch Protocol A"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	default n
+	help
+	  Cypress TrueTouch(tm) Standard Product Generation4
+	  MutliTouch Protocol A support.
+	  Say Y here to enable MutiTouch touch reporting
+	  using protocol A.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_MT_B
+	tristate "Cypress TrueTouch Gen4 MultiTouch Protocol B"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	default n
+	help
+	  Cypress TrueTouch(tm) Standard Product Generation4
+	  MutliTouch Protocol B support.
+	  Say Y here to enable MutiTouch touch reporting
+	  using protocol B.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_BUTTON
+	tristate "Cypress TrueTouch Gen4 MultiTouch CapSense Button"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	default n
+	help
+	  Cypress TrueTouch(tm) Standard Product Generation4
+	  CapSense driver.
+	  Say Y here to enable CapSense reporting.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_DEVICE_ACCESS
+	tristate "Cypress TrueTouch Gen4 MultiTouch Device Access"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	default n
+	help
+	  Cypress TrueTouch(tm) Standard Product Generation4
+	  Device access module.
+	  This modules adds an interface to access touchscreen
+	  controller using driver sysfs nodes.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_LOADER
+	tristate "Cypress TrueTouch Gen4 MultiTouch Loader"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	default n
+	help
+	  Cypress TrueTouch(tm) Standard Product Generation4
+	  FW Loader module.
+	  This module enables support for Firmware upgrade.
+
+config TOUCHSCREEN_CYPRESS_CYTTSP4_DEBUG_MODULE
+	tristate "Cypress TrueTouch Gen4 MultiTouch Debug Module"
+	depends on TOUCHSCREEN_CYPRESS_CYTTSP4
+	default n
+	help
+	  Cypress TrueTouch(tm) Standard Product Generation4
+	  Debug module.
+	  This module adds support for verbose printing touch
+	  information.
 endif

@@ -24,6 +24,8 @@
 #include <linux/mfd/pm8xxx/core.h>
 #include <linux/mfd/pm8xxx/pwm.h>
 #include <linux/leds-pm8xxx.h>
+#include <linux/mfd/pm8xxx/mpp.h>
+#include <hsad/config_interface.h>
 
 #define SSBI_REG_ADDR_DRV_KEYPAD	0x48
 #define PM8XXX_DRV_KEYPAD_BL_MASK	0xf0
@@ -52,6 +54,8 @@
 #define WLED_OVP_CFG_REG		SSBI_REG_ADDR_WLED_CTRL(13)
 #define WLED_BOOST_CFG_REG		SSBI_REG_ADDR_WLED_CTRL(14)
 #define WLED_HIGH_POLE_CAP_REG		SSBI_REG_ADDR_WLED_CTRL(16)
+#define WLED_CNTRL_15		0x268	//config external component
+#define WLED_CLOCK_SET		0x265  //this register BIT3:4 is used to set WLED clock
 
 #define WLED_STRINGS			0x03
 #define WLED_OVP_VAL_MASK		0x30
@@ -149,7 +153,11 @@ static const struct supported_leds led_map[] = {
 	LED_MAP(PM8XXX_VERSION_8921, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0),
 	LED_MAP(PM8XXX_VERSION_8018, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0),
 	LED_MAP(PM8XXX_VERSION_8922, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1),
+#ifdef CONFIG_HUAWEI_KERNEL
+	LED_MAP(PM8XXX_VERSION_8038, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1),
+#else
 	LED_MAP(PM8XXX_VERSION_8038, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1),
+#endif
 };
 
 /**
@@ -175,6 +183,9 @@ struct pm8xxx_led_data {
 	struct pwm_device	*pwm_dev;
 	int			pwm_channel;
 	u32			pwm_period_us;
+#ifdef CONFIG_HUAWEI_KERNEL
+	u32			pwm_duty_us;
+#endif
 	struct pm8xxx_pwm_duty_cycles *pwm_duty_cycles;
 	struct wled_config_data *wled_cfg;
 	int			max_current;
@@ -182,6 +193,21 @@ struct pm8xxx_led_data {
 
 static void led_kp_set(struct pm8xxx_led_data *led, enum led_brightness value)
 {
+#ifdef CONFIG_HUAWEI_KERNEL
+    struct pm8xxx_mpp_config_data mpp_config_data;
+	mpp_config_data.type =  PM8XXX_MPP_TYPE_SINK;
+	mpp_config_data.level = PM8XXX_MPP_CS_OUT_5MA;
+	if(value == LED_OFF)
+	{
+	    mpp_config_data.control = PM8XXX_MPP_CS_CTRL_DISABLE;
+	}
+	else
+	{
+	    mpp_config_data.control = PM8XXX_MPP_CS_CTRL_MPP_LOW_EN;
+	}
+	pm8xxx_mpp_config(led->cdev.gpio, &mpp_config_data);
+#else
+    /* disable following code and recode for touchcreen virtualkey backlight */
 	int rc;
 	u8 level;
 
@@ -196,6 +222,7 @@ static void led_kp_set(struct pm8xxx_led_data *led, enum led_brightness value)
 	if (rc < 0)
 		dev_err(led->cdev.dev,
 			"can't set keypad backlight level rc=%d\n", rc);
+#endif
 }
 
 static void led_lc_set(struct pm8xxx_led_data *led, enum led_brightness value)
@@ -400,6 +427,7 @@ static int pm8xxx_led_pwm_work(struct pm8xxx_led_data *led)
 	int rc = 0;
 
 	if (led->pwm_duty_cycles == NULL) {
+		led->pwm_period_us = 1000;
 		duty_us = (led->pwm_period_us * led->cdev.brightness) /
 								LED_FULL;
 		rc = pwm_config(led->pwm_dev, duty_us, led->pwm_period_us);
@@ -433,6 +461,16 @@ static void __pm8xxx_led_work(struct pm8xxx_led_data *led,
 	mutex_lock(&led->lock);
 
 	switch (led->id) {
+#ifdef CONFIG_HUAWEI_KERNEL
+	case PM8XXX_ID_LED_KB_LIGHT:
+	case PM8XXX_ID_LED_0:
+	case PM8XXX_ID_LED_1:
+		led_kp_set(led, level);
+		break;
+	case PM8XXX_ID_LED_2:
+		led_lc_set(led, level);
+		break;
+#else
 	case PM8XXX_ID_LED_KB_LIGHT:
 		led_kp_set(led, level);
 		break;
@@ -441,6 +479,7 @@ static void __pm8xxx_led_work(struct pm8xxx_led_data *led,
 	case PM8XXX_ID_LED_2:
 		led_lc_set(led, level);
 		break;
+#endif
 	case PM8XXX_ID_FLASH_LED_0:
 	case PM8XXX_ID_FLASH_LED_1:
 		led_flash_set(led, level);
@@ -462,6 +501,108 @@ static void __pm8xxx_led_work(struct pm8xxx_led_data *led,
 
 	mutex_unlock(&led->lock);
 }
+#ifdef CONFIG_HUAWEI_KERNEL
+static int pwm_duty_pcts[56] = {
+		100,0
+};
+static int pm8xxx_blink_set(struct pm8xxx_led_data *led, int on_ms, int off_ms)
+{
+	int rc = 0;
+	int start_idx, idx_len;
+	mutex_lock(&led->lock);
+	led->pwm_duty_us = on_ms*USEC_PER_MSEC;
+	led->pwm_period_us = (on_ms + off_ms)*USEC_PER_MSEC;
+	if(0 == led->pwm_period_us)
+	{
+		on_ms = off_ms = led->pwm_duty_us =0;
+		led->pwm_period_us = 1000;
+	}
+	pr_debug("%s: duty_us = %d period_us = %d\n",__func__,led->pwm_duty_us,led->pwm_period_us);
+	if(on_ms > 0 && off_ms > 0)
+	{
+		start_idx = 1;
+		if(on_ms >= off_ms)
+		{
+			idx_len = 2;
+		}
+		else
+		{
+			idx_len = (on_ms + off_ms)/on_ms;
+			if((start_idx + idx_len) > 64)
+				idx_len = 2;
+		}
+		rc = pm8xxx_pwm_lut_config(led->pwm_dev, led->pwm_period_us,
+				pwm_duty_pcts,
+				on_ms,
+				start_idx, idx_len, 0, 0,
+				PM8XXX_LED_PWM_FLAGS);
+		led_rgb_write(led, SSBI_REG_ADDR_RGB_CNTL1, 1);
+		rc = pm8xxx_pwm_lut_enable(led->pwm_dev, 1);
+	}
+	else
+	{
+		rc = pm8xxx_pwm_lut_enable(led->pwm_dev, 0);
+		led_rgb_write(led, SSBI_REG_ADDR_RGB_CNTL1, 0);
+	}
+	mutex_unlock(&led->lock);
+	return rc;
+}
+
+static ssize_t led_blink_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct pm8xxx_led_data *led = dev_get_drvdata(dev);
+	int on_ms,off_ms;
+	on_ms  = led->pwm_duty_us/USEC_PER_MSEC;
+	off_ms = (led->pwm_period_us - led->pwm_duty_us)/USEC_PER_MSEC;
+	return snprintf(buf,200,"onMS = %d offMS = %d\n"
+					"COMMAND:echo [onMS] [offMS] > /sys/class/leds/[color]/blink\n"
+					,on_ms,off_ms);
+}
+
+static ssize_t led_blink_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct pm8xxx_led_data *led = dev_get_drvdata(dev);
+	ssize_t ret = -EINVAL;
+	int on_ms, off_ms;
+	/*get two parameters from *buf or turn off the led*/
+	ret = sscanf(buf,"%d %d",&on_ms,&off_ms);
+	if(2 != ret)
+	{
+		on_ms = off_ms = 0;
+		pr_err("%s: para error ret = %d\n",__func__,ret);
+	}
+	pr_debug("%s:onMS = %d offMS = %d\n",__func__,on_ms,off_ms);
+	if (NULL == led->pwm_dev)
+	{
+		if (0 != on_ms || 0 != off_ms)
+		{
+			led_blink_set(&led->cdev, (unsigned long *)&on_ms, (unsigned long *)&off_ms);
+		}
+		else
+		{
+			led_brightness_set(&led->cdev, LED_OFF);
+		}
+		ret = 0;
+	}
+	else
+	{
+		ret = pm8xxx_blink_set(led,on_ms,off_ms);
+	}
+	if(ret)
+	{
+		pr_err("%s:set blink fail pm8xxx_blink_set return val = %d\n",__func__,ret);
+	}
+	else
+	{
+		ret = size;
+	}
+
+	return ret;
+}
+static DEVICE_ATTR(blink, 0664, led_blink_show, led_blink_store);
+#endif
 
 static void pm8xxx_led_work(struct work_struct *work)
 {
@@ -558,6 +699,12 @@ static enum led_brightness pm8xxx_led_get(struct led_classdev *led_cdev)
 
 	return led->cdev.brightness;
 }
+
+#ifdef CONFIG_FB_PM8038_CABC_PIN
+#define ONE_WLED_STRING 1
+#define TWO_WLED_STRINGS 2
+#define THREE_WLED_STRINGS 3
+#endif
 
 static int __devinit init_wled(struct pm8xxx_led_data *led)
 {
@@ -726,7 +873,24 @@ static int __devinit init_wled(struct pm8xxx_led_data *led)
 		return rc;
 	}
 	led->wled_mod_ctrl_val = val;
-
+	/* solve wled whistle issue */
+	/*solve wled whistle issue*/
+	rc = pm8xxx_writeb(led->dev->parent, WLED_CNTRL_15, 0xDF);
+	if (rc) 
+	{ 
+		dev_err(led->dev->parent, "can't write register WLED_CNTRL_15" 
+		" register rc=%d\n", rc);
+		return rc;
+	}
+	
+	/* set 0x265 register .set clock 800khz */
+	rc = pm8xxx_writeb(led->dev->parent, WLED_CLOCK_SET, 0x06);
+	if (rc) 
+	{ 
+		dev_err(led->dev->parent, "can't write register WLED_CLOCK_SET" 
+		" register rc=%d\n", rc);
+		return rc;
+	}
 	/* dump wled registers */
 	wled_dump_regs(led);
 
@@ -830,6 +994,9 @@ static int __devinit pm8xxx_led_probe(struct platform_device *pdev)
 	enum pm8xxx_version version;
 	bool found = false;
 	int rc, i, j;
+#ifdef CONFIG_HUAWEI_KERNEL
+	int max_current = 0;
+#endif
 
 	if (pdata == NULL) {
 		dev_err(&pdev->dev, "platform data not supplied\n");
@@ -858,9 +1025,27 @@ static int __devinit pm8xxx_led_probe(struct platform_device *pdev)
 		led_dat->id     = led_cfg->id;
 		led_dat->pwm_channel = led_cfg->pwm_channel;
 		led_dat->pwm_period_us = led_cfg->pwm_period_us;
+#ifdef CONFIG_HUAWEI_KERNEL
+		led_dat->pwm_duty_us = 0;
+#endif
 		led_dat->pwm_duty_cycles = led_cfg->pwm_duty_cycles;
 		led_dat->wled_cfg = led_cfg->wled_cfg;
+#ifdef CONFIG_HUAWEI_KERNEL
+		if (led_dat->id == PM8XXX_ID_WLED)
+		{
+			max_current = get_wled_max_current();
+			if((max_current > 0) && (max_current <= WLED_MAX_CURR))
+				led_dat->max_current = max_current;
+			else
+				led_dat->max_current = led_cfg->max_current;
+		}
+		else
+		{
+			led_dat->max_current = led_cfg->max_current;
+		}
+#else
 		led_dat->max_current = led_cfg->max_current;
+#endif
 
 		if (!((led_dat->id >= PM8XXX_ID_LED_KB_LIGHT) &&
 				(led_dat->id < PM8XXX_ID_MAX))) {
@@ -890,6 +1075,9 @@ static int __devinit pm8xxx_led_probe(struct platform_device *pdev)
 
 		led_dat->cdev.name		= curr_led->name;
 		led_dat->cdev.default_trigger   = curr_led->default_trigger;
+        #ifdef CONFIG_HUAWEI_KERNEL
+        led_dat->cdev.gpio      = curr_led->gpio;
+        #endif
 		led_dat->cdev.brightness_set    = pm8xxx_led_set;
 		led_dat->cdev.brightness_get    = pm8xxx_led_get;
 		led_dat->cdev.brightness	= LED_OFF;
@@ -914,12 +1102,33 @@ static int __devinit pm8xxx_led_probe(struct platform_device *pdev)
 						 led_dat->id, rc);
 			goto fail_id_check;
 		}
+/*create blink node for RGB leds*/
+		#ifdef CONFIG_HUAWEI_KERNEL
+		if (led_dat->id == PM8XXX_ID_RGB_LED_RED ||
+			led_dat->id == PM8XXX_ID_RGB_LED_GREEN ||
+			led_dat->id == PM8XXX_ID_RGB_LED_BLUE || 
+			led_dat->id == PM8XXX_ID_LED_1)
+		{
+			rc = sysfs_create_file(&led_dat->cdev.dev->kobj, &dev_attr_blink.attr);
+			if (rc)
+			{
+				pr_err(KERN_ERR "unable to create blink node of led %d,rc=%d\n",
+							led_dat->id, rc);
+				goto fail_id_check;
+			}
+		}
+		#endif
 
 		/* configure default state */
 		if (led_cfg->default_state)
-			led->cdev.brightness = led_dat->cdev.max_brightness;
+			/*led_dat is the current pwm device, not led array[0]*/
+			#ifdef CONFIG_FB_PM8038_CABC_PIN
+			led_dat->cdev.brightness = led_dat->cdev.max_brightness;
+			#else
+			led_dat->cdev.brightness = LED_HALF;
+			#endif
 		else
-			led->cdev.brightness = LED_OFF;
+			led_dat->cdev.brightness = LED_OFF;
 
 		if (led_cfg->mode != PM8XXX_LED_MODE_MANUAL) {
 			if (led_dat->id == PM8XXX_ID_RGB_LED_RED ||
@@ -938,10 +1147,11 @@ static int __devinit pm8xxx_led_probe(struct platform_device *pdev)
 					"configure LED, error: %d\n", rc);
 					goto fail_id_check;
 				}
-			schedule_work(&led->work);
+
+			schedule_work(&led_dat->work);
 			}
 		} else {
-			__pm8xxx_led_work(led_dat, led->cdev.brightness);
+			__pm8xxx_led_work(led_dat, led_dat->cdev.brightness);
 		}
 	}
 

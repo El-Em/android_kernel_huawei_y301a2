@@ -62,7 +62,14 @@ ssize_t mdp_dma_lcdc_show_event(struct device *dev,
 
 	INIT_COMPLETION(vsync_cntrl.vsync_wait);
 
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	if (!wait_for_completion_timeout(&vsync_cntrl.vsync_wait, HZ/10))
+		pr_err("Timedout DMA %s %d", __func__, __LINE__);
+	#else
 	wait_for_completion(&vsync_cntrl.vsync_wait);
+	#endif
+	
 	ret = snprintf(buf, PAGE_SIZE, "VSYNC=%llu",
 	ktime_to_ns(vsync_cntrl.vsync_time));
 	buf[strlen(buf) + 1] = '\0';
@@ -432,7 +439,13 @@ void mdp_lcdc_update(struct msm_fb_data_type *mfd)
 	outp32(MDP_INTR_ENABLE, mdp_intr_mask);
 #endif
 	spin_unlock_irqrestore(&mdp_spin_lock, flag);
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	if (wait_for_completion_killable_timeout(&mfd->dma->comp, HZ/10) <= 0)
+		pr_err("DMA_P timedout: %s %i", __func__, __LINE__);
+	#else
 	wait_for_completion_killable(&mfd->dma->comp);
+	#endif
 	mdp_disable_irq(irq_block);
 	up(&mfd->dma->mutex);
 }

@@ -29,6 +29,9 @@
 #include <linux/of_platform.h>
 #include <linux/of_gpio.h>
 #include <linux/spinlock.h>
+#include <hsad/config_interface.h>
+
+extern bool mmi_keystate[255];
 
 struct gpio_button_data {
 	const struct gpio_keys_button *button;
@@ -336,6 +339,14 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 			input_event(input, type, button->code, button->value);
 	} else {
 		input_event(input, type, button->code, !!state);
+		if(button->code <= ARRAY_SIZE(mmi_keystate))
+		{
+			mmi_keystate[button->code] = ((!!state)? MMI_KEY_DOWN : MMI_KEY_UP);
+		}
+		else
+		{
+			printk(KERN_INFO "gpio_keys:key_code = %d out of range\n",button->code);
+		}
 	}
 	input_sync(input);
 }

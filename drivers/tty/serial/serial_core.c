@@ -36,6 +36,9 @@
 
 #include <asm/irq.h>
 #include <asm/uaccess.h>
+#ifdef CONFIG_HUAWEI_KERNEL
+#include <hsad/config_interface.h>
+#endif
 
 /*
  * This is used to lock changes in serial line configuration.
@@ -62,7 +65,32 @@ static void uart_wait_until_sent(struct tty_struct *tty, int timeout);
 static void uart_change_pm(struct uart_state *state, int pm_state);
 
 static void uart_port_shutdown(struct tty_port *port);
+#ifdef CONFIG_HUAWEI_KERNEL
+/*BRCM lgh added for LPM*/
+extern void bluesleep_outgoing_data(void);
+extern void bluesleep_uart_open(struct uart_port * uport);
+extern void bluesleep_uart_close(struct uart_port* uport);
 
+/* Use variable to indicate bt devie, avoid to get device type too frequent
+ * which will cause too much print in kernel */
+static bool g_bIsBcmDevice = false;
+
+static void hw_bt_is_bcm(void)
+{
+	int bt_fm_chip_type = (int)BT_FM_UNKNOWN_DEVICE;
+
+	/* get bt/fm chip type from the device feature configuration (.xml file) */
+	bt_fm_chip_type = get_bt_fm_device_type();
+	if(BT_FM_BROADCOM_BCM4330 != bt_fm_chip_type)
+	{
+		printk("BT-FM, hw_bt_is_bcm: chip type is %d.\n",bt_fm_chip_type);
+		g_bIsBcmDevice = false;
+	}
+
+	g_bIsBcmDevice = true;
+
+}
+#endif
 /*
  * This routine is used by the interrupt handler to schedule processing in
  * the software interrupt portion of the driver.
@@ -518,6 +546,15 @@ static int uart_write(struct tty_struct *tty,
 
 	if (!circ->buf)
 		return 0;
+#ifdef CONFIG_HUAWEI_KERNEL
+	if(true == g_bIsBcmDevice)
+	{
+		if (tty->name && !strcmp(tty->name, "ttyHS3"))
+		{
+			   bluesleep_outgoing_data();
+		}
+	}
+#endif
 
 	spin_lock_irqsave(&port->lock, flags);
 	while (1) {
@@ -1269,8 +1306,16 @@ static void uart_close(struct tty_struct *tty, struct file *filp)
 
 	if (tty_port_close_start(port, tty, filp) == 0)
 		return;
-
-	/*
+#ifdef CONFIG_HUAWEI_KERNEL
+	if(true == g_bIsBcmDevice)
+	{
+        if (tty->name && !strcmp(tty->name, "ttyHS3"))
+        {
+            bluesleep_uart_close(uport);
+        }
+	}
+#endif
+        /*
 	 * At this point, we stop accepting input.  To do this, we
 	 * disable the receive line status interrupts.
 	 */
@@ -1533,6 +1578,16 @@ static int uart_open(struct tty_struct *tty, struct file *filp)
 	if (retval == 0)
 		retval = tty_port_block_til_ready(port, tty, filp);
 
+#ifdef CONFIG_HUAWEI_KERNEL
+	hw_bt_is_bcm();
+	if(true == g_bIsBcmDevice)
+	{
+		if (tty->name && !strcmp(tty->name, "ttyHS3"))
+		{
+			bluesleep_uart_open(state->uart_port);
+		}
+	}
+#endif
 end:
 	return retval;
 err_dec_count:

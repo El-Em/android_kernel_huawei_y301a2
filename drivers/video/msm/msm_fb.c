@@ -42,6 +42,9 @@
 #include <linux/leds.h>
 #include <linux/pm_runtime.h>
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+#include <linux/time.h>
+#endif
 #define MSM_FB_C
 #include "msm_fb.h"
 #include "mddihosti.h"
@@ -49,11 +52,18 @@
 #include "mdp.h"
 #include "mdp4.h"
 
+#include "hw_lcd_common.h"
 #ifdef CONFIG_FB_MSM_TRIPLE_BUFFER
 #define MSM_FB_NUM	3
 #endif
 
 static unsigned char *fbram;
+#ifdef CONFIG_HW_ESD_DETECT
+/*add qcom patch to solve esd issue*/
+static void mipi_dsi_check_live_status(struct work_struct *work);
+static void mipi_dsi_reset_display(struct work_struct *work);
+#define CHECK_PANEL_CYCLE 5000
+#endif
 static unsigned char *fbram_phys;
 static int fbram_size;
 static boolean bf_supported;
@@ -93,6 +103,31 @@ u32 msm_fb_msg_level = 7;
 /* Setting mddi_msg_level to 8 prints out ALL messages */
 u32 mddi_msg_level = 5;
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+unsigned char *msm_frame_base_addr = NULL;
+unsigned int msm_framse_base_size = 0;
+unsigned int *msm_frame_base_phy_addr = NULL;
+unsigned int msm_framse_base_offset = 0;
+unsigned int msm_framse_buffer_xres = 0;
+unsigned int msm_framse_buffer_yres = 0;
+EXPORT_SYMBOL(msm_frame_base_phy_addr);
+EXPORT_SYMBOL(msm_frame_base_addr);
+EXPORT_SYMBOL(msm_framse_base_size);
+EXPORT_SYMBOL(msm_framse_base_offset);
+EXPORT_SYMBOL(msm_framse_buffer_xres);
+EXPORT_SYMBOL(msm_framse_buffer_yres);
+
+char  *vsync_ctrl_time_buffer = NULL;
+unsigned int vsync_ctrl_point_offset = 0; 
+EXPORT_SYMBOL(vsync_ctrl_point_offset);
+EXPORT_SYMBOL(vsync_ctrl_time_buffer);
+
+static void  msm_fb_ioctl_vsync_time(int  flag);
+
+extern void  msm_fb_ioctl_vsync_time(int  flag);
+extern int display_debug_record_start(void);
+extern int  mipi_dsi_isr_workqueue_init(void)  ;
+#endif
 extern int32 mdp_block_power_cnt[MDP_MAX_BLOCK];
 extern unsigned long mdp_timer_duration;
 
@@ -116,6 +151,12 @@ static int mdp_bl_scale_config(struct msm_fb_data_type *mfd,
 						struct mdp_bl_scale_data *data);
 static void msm_fb_scale_bl(__u32 *bl_lvl);
 
+#ifdef CONFIG_FB_AUTO_CABC
+int msm_fb_config_cabc(struct msm_fb_data_type *mfd, struct msmfb_cabc_config cabc_cfg);
+#endif
+#ifdef CONFIG_FB_DYNAMIC_GAMMA
+int msm_fb_set_dynamic_gamma(struct msm_fb_data_type *mfd, enum danymic_gamma_mode gamma_mode);
+#endif
 #ifdef MSM_FB_ENABLE_DBGFS
 
 #define MSM_FB_MAX_DBGFS 1024
@@ -125,6 +166,19 @@ int msm_fb_debugfs_file_index;
 struct dentry *msm_fb_debugfs_root;
 struct dentry *msm_fb_debugfs_file[MSM_FB_MAX_DBGFS];
 static int bl_scale, bl_min_lvl;
+#ifdef CONFIG_HUAWEI_KERNEL
+boolean lcd_have_resume = FALSE;
+boolean last_backlight_setting = FALSE;
+int last_backlight_level = 0;
+#ifdef CONFIG_FB_AUTO_CABC
+struct msmfb_cabc_config last_cabc_mode;
+boolean last_cabc_setting = FALSE;
+#endif
+#ifdef CONFIG_FB_DYNAMIC_GAMMA
+int last_gamma_mode = GAMMA25;
+boolean last_gamma_setting = FALSE;
+#endif
+#endif
 
 DEFINE_MUTEX(msm_fb_notify_update_sem);
 void msmfb_no_update_notify_timer_cb(unsigned long data)
@@ -185,9 +239,25 @@ static void msm_fb_set_bl_brightness(struct led_classdev *led_cdev,
 
 	if (!bl_lvl && value)
 		bl_lvl = 1;
+#ifdef CONFIG_HUAWEI_KERNEL
+	/*if lcd is not resumed, save the backlight value, so it will be set when lcd resume*/
+	if(FALSE == lcd_have_resume)
+	{
+		last_backlight_level = bl_lvl;
+		last_backlight_setting = TRUE;
+	}
+	else
+	{
+		down(&mfd->sem);
+		msm_fb_set_backlight(mfd, bl_lvl);
+		up(&mfd->sem);
+		last_backlight_setting = FALSE;
+	}
+#else
 	down(&mfd->sem);
 	msm_fb_set_backlight(mfd, bl_lvl);
 	up(&mfd->sem);
+#endif
 }
 
 static struct led_classdev backlight_led = {
@@ -338,6 +408,28 @@ static void msm_fb_remove_sysfs(struct platform_device *pdev)
 
 static void bl_workqueue_handler(struct work_struct *work);
 
+#ifdef CONFIG_HW_ESD_DETECT
+/*add qcom patch to solve esd issue*/
+ssize_t show_panel_status(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	ssize_t ret = 0;
+	struct fb_info *fbi = dev_get_drvdata(dev);
+	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)fbi->par;
+
+	ret = snprintf(buf, PAGE_SIZE, "%d",mfd->is_panel_alive);
+	buf[strlen(buf) + 1] = '\0';
+	return ret;
+}
+ssize_t show_sw_esd_status(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	ssize_t ret = 0;
+	ret = snprintf(buf, PAGE_SIZE, "%d",g_Can_Use_SW_Esd);
+	buf[strlen(buf) + 1] = '\0';
+	return ret;
+}
+#endif
 static int msm_fb_probe(struct platform_device *pdev)
 {
 	struct msm_fb_data_type *mfd;
@@ -353,6 +445,11 @@ static int msm_fb_probe(struct platform_device *pdev)
 		fbram_phys = (char *)pdev->resource[0].start;
 		fbram = __va(fbram_phys);
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+		msm_frame_base_addr =fbram;
+		msm_frame_base_phy_addr =(unsigned int *)fbram_phys;
+		msm_framse_base_size =  fbram_size;
+#endif
 		if (!fbram) {
 			printk(KERN_ERR "fbram ioremap failed!\n");
 			return -ENOMEM;
@@ -419,6 +516,48 @@ static int msm_fb_probe(struct platform_device *pdev)
 
 	pdev_list[pdev_list_cnt++] = pdev;
 	msm_fb_create_sysfs(pdev);
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	INIT_DELAYED_WORK(&mfd->panel_live_status, mipi_dsi_check_live_status);
+	INIT_WORK(&mfd->display_reset, mipi_dsi_reset_display);
+	#ifdef CONFIG_HUAWEI_KERNEL
+	mfd->is_panel_alive = TRUE;
+	//create a node for HAL to indicate whether use sw esd solution
+	if (!mfd->use_sw_esd_sysfs_created) {
+		mfd->dev_attr3.attr.name = "sw_esd";
+		mfd->dev_attr3.attr.mode = S_IRUGO;
+		mfd->dev_attr3.show = show_sw_esd_status;
+		sysfs_attr_init(&mfd->dev_attr3.attr);
+		rc = sysfs_create_file(&mfd->fbi->dev->kobj,
+						&mfd->dev_attr3.attr);
+		if (rc) {
+			pr_err("%s: sw esd sysfs creation failed, ret=%d\n",
+				__func__, rc);
+			return rc;
+		}
+		kobject_uevent(&mfd->fbi->dev->kobj, KOBJ_ADD);
+		pr_info("%s: esd node created kobject_uevent(KOBJ_ADD)\n", __func__);
+		mfd->use_sw_esd_sysfs_created = 1;
+	}
+	#endif
+	/*add qcom patch to solve esd issue*/
+	if (!mfd->panel_status_sysfs_created) {
+		mfd->dev_attr2.attr.name = "panel_alive";
+		mfd->dev_attr2.attr.mode = S_IRUGO;
+		mfd->dev_attr2.show = show_panel_status;
+		sysfs_attr_init(&mfd->dev_attr2.attr);
+		rc = sysfs_create_file(&mfd->fbi->dev->kobj,
+						&mfd->dev_attr2.attr);
+		if (rc) {
+			pr_err("%s: sysfs creation failed, ret=%d\n",
+				__func__, rc);
+			return rc;
+		}
+		kobject_uevent(&mfd->fbi->dev->kobj, KOBJ_ADD);
+		pr_info("%s: panel_alive node created kobject_uevent(KOBJ_ADD)\n", __func__);
+		mfd->panel_status_sysfs_created = 1;
+	}
+	#endif
 	return 0;
 }
 
@@ -829,6 +968,18 @@ static int mdp_bl_scale_config(struct msm_fb_data_type *mfd,
 	curr_bl = mfd->bl_level;
 	bl_scale = data->scale;
 	bl_min_lvl = data->min_lvl;
+	/*Warning!!!
+	 *bl_scale will be set by process "mm-pp-daemon",this is feature about CABL which we don't use,
+	 *so we don't allow bl_scale to be zero in case of setting backlight failure
+	 */
+#ifdef CONFIG_HUAWEI_KERNEL
+	if(0 == bl_scale)
+	{
+		bl_scale = 1024; //maximum value is 1024
+		printk(KERN_WARNING "%s:invalid parameter, now set bl_scale to 1024\n",__func__);
+		dump_stack();
+	}
+#endif
 	pr_debug("%s: update scale = %d, min_lvl = %d\n", __func__, bl_scale,
 								bl_min_lvl);
 
@@ -881,12 +1032,21 @@ void msm_fb_set_backlight(struct msm_fb_data_type *mfd, __u32 bkl_lvl)
 		bl_level_old = temp;
 	}
 }
-
+#ifdef CONFIG_HW_ESD_DETECT
+/*add qcom patch to solve esd issue*/
+#define SHIFTBL
+#endif
 static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 			    boolean op_enable)
 {
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
 	struct msm_fb_panel_data *pdata = NULL;
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	#ifdef SHIFTBL
+	static int temp_level;
+	#endif
+	#endif
 	int ret = 0;
 
 	if (!op_enable)
@@ -905,7 +1065,29 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 			ret = pdata->on(mfd->pdev);
 			if (ret == 0) {
 				mfd->panel_power_on = TRUE;
-
+				#ifdef CONFIG_HW_ESD_DETECT
+				/*add qcom patch to solve esd issue*/
+#ifdef SHIFTBL
+				if(!mfd->is_panel_alive) {
+					msleep(20);
+					if (!unset_bl_level)
+						unset_bl_level = temp_level;
+						bl_updated = 0;
+					//schedule_delayed_work(&mfd->backlight_worker, backlight_duration);
+				}
+#endif
+				pr_err("Starting delayed work\n");
+				
+				if(mfd->is_panel_alive == FALSE) {
+					//set true in check live status
+					mfd->is_panel_alive = TRUE;
+				}
+				if(g_Can_Use_SW_Esd)
+				{
+				schedule_delayed_work(&mfd->panel_live_status,
+								msecs_to_jiffies(CHECK_PANEL_CYCLE));
+				}
+				#endif
 /* ToDo: possible conflict with android which doesn't expect sw refresher */
 /*
 	  if (!mfd->hw_refresh)
@@ -916,6 +1098,38 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 	    }
 	  }
 */
+#ifdef CONFIG_HUAWEI_KERNEL
+				/*writeback panel no need for the following setting, only for lcd panel */
+				if(pdata->panel_info.type != WRITEBACK_PANEL)
+				{
+					/*when lcd resume, firstly we set the saved BL, gamma, cabc values if necessary*/
+					lcd_have_resume = TRUE;
+					if(TRUE == last_backlight_setting)
+					{
+						down(&mfd->sem);
+						msm_fb_set_backlight(mfd,last_backlight_level);
+						up(&mfd->sem);
+						last_backlight_setting = FALSE;
+						printk("%s:Waiting for LCD resume ,then set backlight level=%d\n",__func__,last_backlight_level);
+					}
+					#ifdef CONFIG_FB_DYNAMIC_GAMMA
+					if(TRUE == last_gamma_setting)
+					{
+						msm_fb_set_dynamic_gamma(mfd,last_gamma_mode);
+						last_gamma_setting = FALSE;
+						printk("%s:Waiting for LCD resume ,then set gamma mode =%d\n",__func__,last_gamma_mode);
+					}
+					#endif
+					#ifdef CONFIG_FB_AUTO_CABC
+					if(TRUE == last_cabc_setting)
+					{
+						msm_fb_config_cabc(mfd, last_cabc_mode);
+						last_cabc_setting =FALSE;
+						printk("%s:Waiting for LCD resume ,then set cabc mode =%d\n",__func__,last_cabc_mode.mode);
+					}
+					#endif
+				}
+#endif
 			}
 		}
 		break;
@@ -927,11 +1141,38 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 	default:
 		if (mfd->panel_power_on) {
 			int curr_pwr_state;
-
+#ifdef CONFIG_HW_ESD_DETECT
+/*add qcom patch to solve esd issue*/			
+#ifdef SHIFTBL
+			if(!mfd->is_panel_alive) {
+				down(&mfd->sem);
+				bl_updated = 0;
+				temp_level = mfd->bl_level;
+				mfd->bl_level = 0;
+				if (pdata && pdata->set_backlight)
+					pdata->set_backlight(mfd);
+				up(&mfd->sem);
+			}
+#endif
+#endif
+#ifdef CONFIG_HUAWEI_KERNEL
+			/*writeback panel no need for the following setting, only for lcd panel */
+			if(pdata->panel_info.type != WRITEBACK_PANEL)
+			{
+				lcd_have_resume = FALSE;
+			}
+#endif
 			mfd->op_enable = FALSE;
 			curr_pwr_state = mfd->panel_power_on;
 			mfd->panel_power_on = FALSE;
 			cancel_delayed_work_sync(&mfd->backlight_worker);
+			#ifdef CONFIG_HW_ESD_DETECT
+			/*add qcom patch to solve esd issue*/
+			if(g_Can_Use_SW_Esd)
+			{
+				cancel_delayed_work_sync(&mfd->panel_live_status);
+			}
+			#endif
 			bl_updated = 0;
 
 			msleep(16);
@@ -1109,6 +1350,102 @@ static int msm_fb_mmap(struct fb_info *info, struct vm_area_struct * vma)
 	return 0;
 }
 
+/*add qcom patch to solve esd issue*/
+DEFINE_SEMAPHORE(msm_fb_pan_sem);
+DEFINE_SEMAPHORE(msm_fb_ioctl_ppp_sem);
+DEFINE_MUTEX(msm_fb_ioctl_lut_sem);
+#ifdef CONFIG_HW_ESD_DETECT
+static void mipi_dsi_reset_display(struct work_struct *work)
+{
+	struct msm_fb_data_type *mfd = container_of(work,
+				struct msm_fb_data_type, display_reset);
+	#ifndef CONFIG_HUAWEI_KERNEL
+	struct msm_fb_panel_data *pdata =
+		(struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+	int temp_level = 0;
+	#endif
+	
+	down(&msm_fb_pan_sem);
+	down(&msm_fb_ioctl_ppp_sem);
+	mutex_lock(&msm_fb_ioctl_lut_sem);
+	#ifndef CONFIG_HUAWEI_KERNEL
+	down(&mfd->sem);
+	bl_updated = 0;
+	temp_level = mfd->bl_level;
+	mfd->bl_level = 0;
+	if (pdata && pdata->set_backlight)
+		pdata->set_backlight(mfd);
+	up(&mfd->sem);
+	#endif
+	msm_fb_blank_sub(FB_BLANK_POWERDOWN, mfd->fbi, mfd->op_enable);
+	msleep(50);
+	msm_fb_blank_sub(FB_BLANK_UNBLANK, mfd->fbi, mfd->op_enable);
+	msleep(50);
+
+//	if (mdp_rev <= MDP_REV_303)
+		mdp_dma_pan_update(mfd->fbi);
+	#ifndef CONFIG_HUAWEI_KERNEL
+	if (!unset_bl_level)
+		unset_bl_level = temp_level;
+	schedule_delayed_work(&mfd->backlight_worker, backlight_duration);
+	#endif
+	mutex_unlock(&msm_fb_ioctl_lut_sem);
+	up(&msm_fb_ioctl_ppp_sem);
+	up(&msm_fb_pan_sem);
+}
+
+static void mipi_dsi_check_live_status(struct work_struct *work)
+{
+	struct msm_fb_data_type *mfd = container_of(to_delayed_work(work),
+				struct msm_fb_data_type, panel_live_status);
+	struct msm_fb_panel_data *pdata = mfd->pdev->dev.platform_data;
+	int ret = 1;
+
+	if ((pdata) && (pdata->check_live_status)) {
+		if (mdp_rev >= MDP_REV_41)
+			mutex_lock(&mfd->dma->ov_mutex);
+		else
+			down(&mfd->dma->mutex);
+
+		/* For the command mode panels, we return pan display
+		 * IOCTL on vsync interrupt. So, after vsync interrupt comes
+		 * and when DMA_P is in progress, if the panel stops responding
+		 * and if we trigger BTA before DMA_P finishes, then the DSI
+		 * FIFO will not be cleared since the DSI data bus control
+		 * doesn't come back to the host after BTA. This may cause the
+		 * display reset not to be proper. Hence, wait for DMA_P done
+		 * for command mode panels before triggering BTA.
+		 */
+		if (mfd->wait4dmap)
+			mfd->wait4dmap(mfd);
+
+		ret = pdata->check_live_status(mfd);
+
+		if (ret <= 0)
+		{
+			mfd->is_panel_alive = FALSE;
+		}
+
+		if (mdp_rev >= MDP_REV_41)
+			mutex_unlock(&mfd->dma->ov_mutex);
+		else
+			up(&mfd->dma->mutex);
+//		if (mfd->is_panel_alive == FALSE)
+//			schedule_work(&mfd->display_reset);
+
+		if (mfd->panel_power_on && ret > 0) 
+		{
+			pr_debug("Panel is Fine\n");
+			schedule_delayed_work(&mfd->panel_live_status,
+					msecs_to_jiffies(CHECK_PANEL_CYCLE));
+		}
+		else
+		{
+			pr_err("Panel Has gone bad\n");
+		}
+	}
+}
+#endif
 static struct fb_ops msm_fb_ops = {
 	.owner = THIS_MODULE,
 	.fb_open = msm_fb_open,
@@ -1439,10 +1776,10 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 					SZ_4K,
 					0,
 					&(mfd->rotator_iova));
-
+	#ifndef CONFIG_HUAWEI_KERNEL
 	if (!bf_supported || mfd->index == 0)
 		memset(fbi->screen_base, 0x0, fix->smem_len);
-
+	#endif
 	mfd->op_enable = TRUE;
 	mfd->panel_power_on = FALSE;
 
@@ -1714,8 +2051,7 @@ static int msm_fb_release(struct fb_info *info, int user)
 	return ret;
 }
 
-DEFINE_SEMAPHORE(msm_fb_pan_sem);
-
+/*move to front*/
 static void bl_workqueue_handler(struct work_struct *work)
 {
 	struct msm_fb_data_type *mfd = container_of(to_delayed_work(work),
@@ -1738,6 +2074,10 @@ static int msm_fb_pan_display(struct fb_var_screeninfo *var,
 	struct mdp_dirty_region dirty;
 	struct mdp_dirty_region *dirtyPtr = NULL;
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
+	
+#ifdef CONFIG_HUAWEI_KERNEL
+	static bool is_first_frame = TRUE;
+#endif
 
 	/*
 	 * If framebuffer is 2, io pen display is not allowed.
@@ -1820,6 +2160,21 @@ static int msm_fb_pan_display(struct fb_var_screeninfo *var,
 
 	mdp_set_dma_pan_info(info, dirtyPtr,
 			     (var->activate == FB_ACTIVATE_VBL));
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+	msm_framse_base_offset = info->var.yoffset;
+	msm_framse_buffer_xres = info->var.xres;
+	msm_framse_buffer_yres = info->var.yres;
+#endif
+
+/* Do not refresh the first frame, because the frame's data is 0x00 */
+#ifdef CONFIG_HUAWEI_KERNEL
+	if(unlikely(is_first_frame == TRUE))
+	{
+		is_first_frame = FALSE;
+		printk("%s:Don't refresh the first frame to LCD\n",__func__);
+	}
+	else
+#endif
 	mdp_dma_pan_update(info);
 	up(&msm_fb_pan_sem);
 
@@ -2847,6 +3202,9 @@ static int msmfb_vsync_ctrl(struct fb_info *info, void __user *argp)
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
 
 	ret = copy_from_user(&enable, argp, sizeof(enable));
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+	msm_fb_ioctl_vsync_time(enable);
+#endif
 	if (ret) {
 		pr_err("%s:msmfb_overlay_vsync ioctl failed", __func__);
 		return ret;
@@ -2926,16 +3284,26 @@ static int msmfb_overlay_unset(struct fb_info *info, unsigned long *argp)
 
 static int msmfb_overlay_vsync_ctrl(struct fb_info *info, void __user *argp)
 {
-	int ret;
+	/*add qcom patch to solve esd issue*/
+	int ret = 0;
 	int enable;
-
+#ifdef CONFIG_HW_ESD_DETECT	
+	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par; 
+#endif
 	ret = copy_from_user(&enable, argp, sizeof(enable));
 	if (ret) {
 		pr_err("%s:msmfb_overlay_vsync ioctl failed", __func__);
 		return ret;
 	}
-
-	ret = mdp4_overlay_vsync_ctrl(info, enable);
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+	msm_fb_ioctl_vsync_time(enable);
+#endif
+#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	//ret = mdp4_overlay_vsync_ctrl(info, enable);
+	if (mfd->is_panel_alive) 
+#endif		
+		ret = mdp4_overlay_vsync_ctrl(info, enable);
 
 	return ret;
 }
@@ -2973,7 +3341,10 @@ static int msmfb_overlay_play(struct fb_info *info, unsigned long *argp)
 
 	if (mfd->overlay_play_enable == 0)	/* nothing to do */
 		return 0;
-
+#ifdef CONFIG_HW_ESD_DETECT
+	if (!mfd->is_panel_alive) 
+		return 0;
+#endif		
 	ret = copy_from_user(&req, argp, sizeof(req));
 	if (ret) {
 		printk(KERN_ERR "%s:msmfb_overlay_play ioctl failed \n",
@@ -3201,9 +3572,7 @@ static int msmfb_mixer_info(struct fb_info *info, unsigned long *argp)
 
 #endif
 
-DEFINE_SEMAPHORE(msm_fb_ioctl_ppp_sem);
-DEFINE_MUTEX(msm_fb_ioctl_lut_sem);
-
+/*move to front*/
 /* Set color conversion matrix from user space */
 
 #ifndef CONFIG_FB_MSM_MDP40
@@ -3270,7 +3639,9 @@ static int msmfb_notify_update(struct fb_info *info, unsigned long *argp)
 		ret = wait_for_completion_interruptible_timeout(
 		&mfd->msmfb_no_update_notify, 4*HZ);
 	}
-	return (ret > 0) ? 0 : -1;
+	if (ret == 0)
+		ret = -ETIMEDOUT;
+	return (ret > 0) ? 0 : ret;
 }
 
 static int msmfb_handle_pp_ioctl(struct msm_fb_data_type *mfd,
@@ -3361,6 +3732,101 @@ static int msmfb_handle_metadata_ioctl(struct msm_fb_data_type *mfd,
 	}
 	return ret;
 }
+
+#ifdef CONFIG_FB_DYNAMIC_GAMMA
+/***************************************************************
+Function: msm_fb_set_dynamic_gamma
+Description: Config gamma parameter
+Parameters:
+	struct msm_fb_data_type *mfd: mfd pointer
+	struct danymic_gamma_mode gamma_mode: gamma config structure
+Return:
+	0: success
+***************************************************************/
+int msm_fb_set_dynamic_gamma(struct msm_fb_data_type *mfd, enum danymic_gamma_mode gamma_mode)
+{
+	int ret = 0;
+	struct msm_fb_panel_data *pdata = NULL;
+
+	pdata = (struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+	if ((pdata) && (pdata->set_dynamic_gamma))
+	{
+		down(&mfd->sem);
+		ret = pdata->set_dynamic_gamma(gamma_mode,mfd);
+		up(&mfd->sem);
+	}
+	else
+	{
+		MSM_FB_INFO("This panel can not support dynamic gama function");
+	}
+
+	return ret;
+}
+#endif
+#ifdef CONFIG_FB_AUTO_CABC
+/***************************************************************
+Function: msm_fb_config_cabc
+Description: Config CABC parameter
+Parameters:
+	struct msm_fb_data_type *mfd: mfd pointer
+	struct msmfb_cabc_config cabc_cfg: CABC config structure
+Return:
+	0: success
+***************************************************************/
+int msm_fb_config_cabc(struct msm_fb_data_type *mfd, struct msmfb_cabc_config cabc_cfg)
+{
+	int ret = 0;
+	struct msm_fb_panel_data *pdata = NULL;
+
+	pdata = (struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+	if ((pdata) && (pdata->config_cabc))
+	{
+		down(&mfd->sem);
+		ret = pdata->config_cabc(cabc_cfg,mfd);
+		up(&mfd->sem);
+	}
+	else
+	{
+		MSM_FB_INFO("This panel can not support auto cabc function");
+	}
+
+	return ret;
+}
+#endif
+
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+/*****************************************
+  @func_name:  msm_fb_ioctl_vsync_time
+  @para: flag : 1: start report vsync event 0:stop report vsync  event
+  @func:  record the time that  start or stop report
+  @return  void
+******************************************/
+void  msm_fb_ioctl_vsync_time(int  flag)
+{
+	struct timespec ts;
+	static unsigned int i=0;
+	static long vsync_ctrl_time_ms = 0;
+	
+	if(0 == display_debug_record_start())
+	{
+		return ;
+	}
+
+	vsync_ctrl_point_offset  = strlen(vsync_ctrl_time_buffer);
+
+	ktime_get_ts(&ts);
+	vsync_ctrl_time_ms = ts.tv_sec*1000 + ts.tv_nsec/1000000;
+
+	sprintf((vsync_ctrl_time_buffer+vsync_ctrl_point_offset),"%d%s%ld%s%d%s",\
+	i++,DISPLAY_BREAK ,vsync_ctrl_time_ms,DISPLAY_BREAK,flag,"\n");
+
+	if(RECORD_BUFFER_THRESHOLD < vsync_ctrl_point_offset)
+	{
+	        memset(vsync_ctrl_time_buffer,0,sizeof(vsync_ctrl_time_buffer));
+	}
+
+}
+#endif
 static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 			unsigned long arg)
 {
@@ -3380,7 +3846,12 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 	struct msmfb_mdp_pp mdp_pp;
 	struct msmfb_metadata mdp_metadata;
 	int ret = 0;
-
+#ifdef CONFIG_FB_DYNAMIC_GAMMA
+	int gamma_setting_value = 0;
+#endif
+#ifdef CONFIG_FB_AUTO_CABC
+        struct msmfb_cabc_config cabc_cfg;
+#endif
 	switch (cmd) {
 #ifdef CONFIG_FB_MSM_OVERLAY
 	case MSMFB_OVERLAY_GET:
@@ -3390,6 +3861,10 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		ret = msmfb_overlay_set(info, argp);
 		break;
 	case MSMFB_OVERLAY_UNSET:
+		#ifdef CONFIG_HW_ESD_DETECT
+		/*add qcom patch to solve esd issue*/
+		pr_debug("UNSET ioctal Called");
+		#endif
 		ret = msmfb_overlay_unset(info, argp);
 		break;
 	case MSMFB_OVERLAY_COMMIT:
@@ -3664,6 +4139,32 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 
 		ret = msmfb_handle_pp_ioctl(mfd, &mdp_pp);
 		break;
+#ifdef CONFIG_FB_AUTO_CABC
+    case MSMFB_AUTO_CABC:
+        ret = copy_from_user(&cabc_cfg, argp, sizeof(cabc_cfg));
+        if (ret)
+        {
+            printk(KERN_ERR
+                "%s:MSMFB_AUTO_CABC ioctl failed \n",
+                 __func__);
+            return ret;
+        }
+		/*if lcd is not resumed, save the cabc_mode value, so it will be set when lcd resume*/
+		if(FALSE == lcd_have_resume)
+		{
+			last_cabc_mode = cabc_cfg;
+			last_cabc_setting =TRUE;
+			printk(KERN_INFO
+				"%s:MSMFB_AUTO_CABC save last setting \n",
+				__func__);
+		}
+		else
+		{
+			ret = msm_fb_config_cabc(mfd, cabc_cfg);
+			last_cabc_setting =FALSE;
+		}
+        break;
+#endif
 
 	case MSMFB_METADATA_SET:
 		ret = copy_from_user(&mdp_metadata, argp, sizeof(mdp_metadata));
@@ -3672,6 +4173,33 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		ret = msmfb_handle_metadata_ioctl(mfd, &mdp_metadata);
 		break;
 
+/* Add dynamic gama function */
+#ifdef CONFIG_FB_DYNAMIC_GAMMA
+	case MSMFB_DYNAMIC_GAMMA:
+		ret = copy_from_user(&gamma_setting_value, argp, sizeof(gamma_setting_value));
+		if (ret)
+		{
+			printk(KERN_ERR
+				"%s:MSMFB_DYNAMIC_GAMMA ioctl failed \n",
+				__func__);
+			return ret;
+		}
+		/*if lcd is not resumed, save the gamma_mode value, so it will be set when lcd resume*/
+		if(FALSE == lcd_have_resume)
+		{
+			last_gamma_mode = gamma_setting_value;
+			last_gamma_setting = TRUE;
+			printk(KERN_INFO
+				"%s:MSMFB_DYNAMIC_GAMMA save last setting \n",
+				__func__);
+		}
+		else
+		{
+			ret = msm_fb_set_dynamic_gamma(mfd, gamma_setting_value);      
+			last_gamma_setting = FALSE;
+		}
+		break;
+#endif
 	default:
 		MSM_FB_INFO("MDP: unknown ioctl (cmd=%x) received!\n", cmd);
 		ret = -EINVAL;
@@ -3896,6 +4424,9 @@ int __init msm_fb_init(void)
 						   (u32 *) &msm_fb_debug_enabled);
 		}
 	}
+#endif
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+	mipi_dsi_isr_workqueue_init();
 #endif
 
 	return 0;

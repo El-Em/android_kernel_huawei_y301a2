@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -735,6 +735,7 @@ extern struct mdp_hist_mgmt *mdp_hist_mgmt_array[];
 
 void mdp_hw_init(int splash);
 int mdp_ppp_pipe_wait(void);
+void mdp_pipe_kickoff_simplified(uint32 term);
 void mdp_pipe_kickoff(uint32 term, struct msm_fb_data_type *mfd);
 void mdp_clk_ctrl(int on);
 void mdp_pipe_ctrl(MDP_BLOCK_TYPE block, MDP_BLOCK_POWER_STATE state,
@@ -832,12 +833,12 @@ int mdp_set_core_clk(u32 rate);
 int mdp_clk_round_rate(u32 rate);
 
 unsigned long mdp_get_core_clk(void);
-unsigned long mdp_perf_level2clk_rate(uint32 perf_level);
 
 #ifdef CONFIG_MSM_BUS_SCALING
-int mdp_bus_scale_update_request(uint32_t index);
+int mdp_bus_scale_update_request(u64 ab, u64 ib);
 #else
-static inline int mdp_bus_scale_update_request(uint32_t index)
+static inline int mdp_bus_scale_update_request(u64 ab,
+					       u64 ib)
 {
 	return 0;
 }

@@ -117,17 +117,36 @@ static struct msm_gpiomux_config msm8930_cam_common_configs[] = {
 			[GPIOMUX_SUSPENDED] = &cam_settings[0],
 		},
 	},
+
+#ifndef CONFIG_HUAWEI_KERNEL 	
 	{
-		.gpio = 4,
+		.gpio = 54,
 		.settings = {
-			[GPIOMUX_ACTIVE]    = &cam_settings[9],
+			[GPIOMUX_ACTIVE]    = &cam_settings[2],
 			[GPIOMUX_SUSPENDED] = &cam_settings[0],
 		},
 	},
+	
 	{
-		.gpio = 5,
+		.gpio = 20,
 		.settings = {
-			[GPIOMUX_ACTIVE]    = &cam_settings[1],
+			[GPIOMUX_ACTIVE]    = &cam_settings[3],
+			[GPIOMUX_SUSPENDED] = &cam_settings[8],
+		},
+	},
+	{
+		.gpio = 21,
+		.settings = {
+			[GPIOMUX_ACTIVE]    = &cam_settings[3],
+			[GPIOMUX_SUSPENDED] = &cam_settings[8],
+		},
+	},
+	
+#endif	
+   {
+		.gpio = 4,
+		.settings = {
+			[GPIOMUX_ACTIVE]    = &cam_settings[9],
 			[GPIOMUX_SUSPENDED] = &cam_settings[0],
 		},
 	},
@@ -139,22 +158,25 @@ static struct msm_gpiomux_config msm8930_cam_common_configs[] = {
 		},
 	},
 	{
+		.gpio = 5,
+		.settings = {
+			[GPIOMUX_ACTIVE]    = &cam_settings[1],
+			[GPIOMUX_SUSPENDED] = &cam_settings[0],
+		},
+	},
+	
+	{
 		.gpio = 107,
 		.settings = {
 			[GPIOMUX_ACTIVE]    = &cam_settings[2],
 			[GPIOMUX_SUSPENDED] = &cam_settings[0],
 		},
 	},
-	{
-		.gpio = 54,
-		.settings = {
-			[GPIOMUX_ACTIVE]    = &cam_settings[2],
-			[GPIOMUX_SUSPENDED] = &cam_settings[0],
-		},
-	},
+	
 };
 
 static struct msm_gpiomux_config msm8930_cam_2d_configs[] = {
+	#ifndef CONFIG_HUAWEI_KERNEL 	
 	{
 		.gpio = 18,
 		.settings = {
@@ -169,18 +191,19 @@ static struct msm_gpiomux_config msm8930_cam_2d_configs[] = {
 			[GPIOMUX_SUSPENDED] = &cam_settings[8],
 		},
 	},
+	#endif
 	{
 		.gpio = 20,
 		.settings = {
 			[GPIOMUX_ACTIVE]    = &cam_settings[3],
-			[GPIOMUX_SUSPENDED] = &cam_settings[8],
+			[GPIOMUX_SUSPENDED] = &cam_settings[0],
 		},
 	},
 	{
 		.gpio = 21,
 		.settings = {
 			[GPIOMUX_ACTIVE]    = &cam_settings[3],
-			[GPIOMUX_SUSPENDED] = &cam_settings[8],
+			[GPIOMUX_SUSPENDED] = &cam_settings[0],
 		},
 	},
 };
@@ -430,12 +453,21 @@ static struct msm_camera_device_platform_data msm_camera_csi_device_data[] = {
 };
 
 static struct camera_vreg_t msm_8930_cam_vreg[] = {
-	{"cam_vdig", REG_LDO, 1200000, 1200000, 105000},
-	{"cam_vio", REG_VS, 0, 0, 0},
-	{"cam_vana", REG_LDO, 2800000, 2850000, 85600},
-	{"cam_vaf", REG_LDO, 2800000, 2850000, 300000},
+	{"cam_iovdd", REG_VS, 0, 0, 0},
+	{"cam_avdd", REG_LDO, 2800000, 2850000, 85600},
 };
 
+static struct camera_vreg_t msm_imx188_cam_vreg[] = {
+	{"cam_avdd", REG_LDO, 2800000, 2850000, 85600,0},
+	{"cam_iovdd", REG_VS, 0, 0, 0,1000},
+	{"cam_dvdd", REG_LDO, 1200000, 1250000,0,10},
+	
+};
+static struct camera_vreg_t msm_ov9724_cam_vreg[] = {
+	{"cam_avdd", REG_LDO, 2850000, 2850000, 85600,0},
+	{"cam_iovdd", REG_VS, 0, 0, 0,0},
+	{"cam_dvdd", REG_LDO, 1200000, 1200000,0,0},
+};
 static struct gpio msm8930_common_cam_gpio[] = {
 	{20, GPIOF_DIR_IN, "CAMIF_I2C_DATA"},
 	{21, GPIOF_DIR_IN, "CAMIF_I2C_CLK"},
@@ -458,10 +490,12 @@ static struct msm_gpio_set_tbl msm8930_front_cam_gpio_set_tbl[] = {
 };
 
 static struct msm_gpio_set_tbl msm8930_back_cam_gpio_set_tbl[] = {
-	{54, GPIOF_OUT_INIT_LOW, 1000},
-	{54, GPIOF_OUT_INIT_HIGH, 4000},
 	{107, GPIOF_OUT_INIT_LOW, 1000},
 	{107, GPIOF_OUT_INIT_HIGH, 4000},
+};
+
+static struct msm_gpio_set_tbl mt9e013_cam_gpio_req_init_tbl[] = {
+	{107, GPIOF_OUT_INIT_HIGH, 1000},  //set the flag of gpio, then usleep the times
 };
 
 static struct msm_camera_gpio_conf msm_8930_front_cam_gpio_conf = {
@@ -484,6 +518,8 @@ static struct msm_camera_gpio_conf msm_8930_back_cam_gpio_conf = {
 	.cam_gpio_req_tbl_size = ARRAY_SIZE(msm8930_back_cam_gpio),
 	.cam_gpio_set_tbl = msm8930_back_cam_gpio_set_tbl,
 	.cam_gpio_set_tbl_size = ARRAY_SIZE(msm8930_back_cam_gpio_set_tbl),
+	.cam_gpio_req_init_tbl = mt9e013_cam_gpio_req_init_tbl,
+	.cam_gpio_req_init_tbl_size = ARRAY_SIZE(mt9e013_cam_gpio_req_init_tbl),
 };
 
 static struct i2c_board_info msm_act_main_cam_i2c_info = {
@@ -499,7 +535,7 @@ static struct msm_actuator_info msm_act_main_cam_0_info = {
 };
 
 static struct msm_camera_sensor_flash_data flash_imx074 = {
-	.flash_type	= MSM_CAMERA_FLASH_LED,
+	.flash_type	= MSM_CAMERA_FLASH_NONE,//MSM_CAMERA_FLASH_LED,
 #ifdef CONFIG_MSM_CAMERA_FLASH
 	.flash_src	= &msm_flash_src
 #endif
@@ -620,11 +656,612 @@ static struct msm_camera_sensor_info msm_camera_sensor_s5k3l1yx_data = {
 	.sensor_type          = BAYER_SENSOR,
 	.actuator_info    = &msm_act_main_cam_2_info,
 };
+static struct msm_actuator_info msm_act_main_cam_9_info = {
+	.board_info     = &msm_act_main_cam_i2c_info,
+	.cam_name   = MSM_ACTUATOR_MAIN_CAM_9,
+	.bus_id         = MSM_8930_GSBI4_QUP_I2C_BUS_ID,
+	.vcm_pwd        = 13,
+	.vcm_enable     = 1,
+};
 
+static struct msm_camera_csi_lane_params mt9e013_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0xF,
+};
+
+static struct msm_camera_sensor_flash_data flash_mt9e013 = {
+	.flash_type = MSM_CAMERA_FLASH_LED,
+	.flash_src = &msm_flash_src
+};
+
+static struct msm_camera_sensor_platform_info sensor_board_info_mt9e013 = {
+	.mount_angle	= 0, 
+	.cam_vreg = msm_8930_cam_vreg,
+	.num_vreg = ARRAY_SIZE(msm_8930_cam_vreg),
+	.gpio_conf = &msm_8930_back_cam_gpio_conf,
+	.csi_lane_params = &mt9e013_csi_lane_params,
+};
+
+static struct msm_camera_sensor_info msm_camera_sensor_mt9e013_data = {
+	.sensor_name	= "mt9e013",
+	.pdata	= &msm_camera_csi_device_data[0],
+	.flash_data	= &flash_mt9e013,
+	.sensor_platform_info = &sensor_board_info_mt9e013,
+	.csi_if	= 1,
+	.camera_type = BACK_CAMERA_2D,
+	.sensor_type          = BAYER_SENSOR, 
+	.actuator_info    = &msm_act_main_cam_9_info,
+};
+
+#ifdef CONFIG_GC0313
+static struct msm_camera_csi_lane_params gc0313_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0x1,   //maybe, this can be define front csi_lane_params
+};
+
+static struct msm_camera_sensor_flash_data flash_gc0313 = {
+	.flash_type = MSM_CAMERA_FLASH_NONE,
+};
+
+static struct msm_camera_sensor_platform_info sensor_board_info_gc0313 = {
+	.mount_angle	= 270, 
+	.cam_vreg = msm_8930_cam_vreg,
+	.num_vreg = ARRAY_SIZE(msm_8930_cam_vreg),
+	.gpio_conf = &msm_8930_front_cam_gpio_conf,
+	.csi_lane_params = &gc0313_csi_lane_params,
+};
+
+static struct msm_camera_sensor_info msm_camera_sensor_gc0313_data = {
+	.sensor_name	= "gc0313",
+	.pdata	= &msm_camera_csi_device_data[1],
+	.flash_data	= &flash_gc0313,
+	.sensor_platform_info = &sensor_board_info_gc0313,
+	.csi_if	= 1,
+	.camera_type = FRONT_CAMERA_2D,
+	.sensor_type          = YUV_SENSOR, 
+	.actuator_info    = NULL,
+};
+#endif
+
+#ifdef CONFIG_BF3905
+static struct msm_camera_csi_lane_params bf3905_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0x1,   //maybe, this can be define front csi_lane_params
+};
+
+static struct msm_camera_sensor_flash_data flash_bf3905 = {
+	.flash_type = MSM_CAMERA_FLASH_NONE,
+};
+
+static struct msm_camera_sensor_platform_info sensor_board_info_bf3905 = {
+	.mount_angle	= 270, 
+	.cam_vreg = msm_8930_cam_vreg,
+	.num_vreg = ARRAY_SIZE(msm_8930_cam_vreg),
+	.gpio_conf = &msm_8930_front_cam_gpio_conf,
+	.csi_lane_params = &bf3905_csi_lane_params,
+};
+
+static struct msm_camera_sensor_info msm_camera_sensor_bf3905_data = {
+	.sensor_name	= "bf3905",
+	.pdata	= &msm_camera_csi_device_data[1],
+	.flash_data	= &flash_bf3905,
+	.sensor_platform_info = &sensor_board_info_bf3905,
+	.csi_if	= 1,
+	.camera_type = FRONT_CAMERA_2D,
+	.sensor_type          = YUV_SENSOR, 
+	.actuator_info    = NULL,
+};
+#endif
+
+static struct msm_camera_csi_lane_params mt9v113_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0x1,
+};
+
+
+static struct msm_camera_sensor_flash_data flash_mt9v113 = {
+	.flash_type = MSM_CAMERA_FLASH_NONE,
+};
+
+static struct msm_camera_sensor_platform_info sensor_board_info_mt9v113 = {
+	.mount_angle	= 270, 
+	.cam_vreg = msm_8930_cam_vreg,
+	.num_vreg = ARRAY_SIZE(msm_8930_cam_vreg),
+	.gpio_conf = &msm_8930_front_cam_gpio_conf,
+	.csi_lane_params = &mt9v113_csi_lane_params,
+};
+
+static struct msm_camera_sensor_info msm_camera_sensor_mt9v113_data = {
+	.sensor_name	= "mt9v113",
+	.pdata	= &msm_camera_csi_device_data[1],
+	.flash_data	= &flash_mt9v113,
+	.sensor_platform_info = &sensor_board_info_mt9v113,
+	.csi_if	= 1,
+	.camera_type = FRONT_CAMERA_2D,
+	.sensor_type          = YUV_SENSOR, 
+	.actuator_info    = NULL,
+};
+static struct msm_camera_csi_lane_params ov5647_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0xF,
+};
+static struct msm_gpio_set_tbl ov5647_cam_gpio_set_tbl[] = {
+	{54, GPIOF_OUT_INIT_LOW, 5000},
+	{54, GPIOF_OUT_INIT_HIGH, 1000},
+	{107, GPIOF_OUT_INIT_HIGH, 3000},
+};
+static struct msm_gpio_set_tbl ov5647_gpio_req_init_tbl[] = {
+	{54, GPIOF_OUT_INIT_LOW, 1000},
+	{107, GPIOF_OUT_INIT_LOW, 1000},
+};
+static struct msm_actuator_info msm_act_main_cam_5_info = {
+	.board_info     = &msm_act_main_cam_i2c_info,
+	.cam_name   = MSM_ACTUATOR_MAIN_CAM_5,
+	.bus_id         = MSM_8930_GSBI4_QUP_I2C_BUS_ID,
+	.vcm_pwd        = 13,
+	.vcm_enable     = 1,
+};
+
+static struct msm_camera_gpio_conf msm_8930_ov5647_cam_gpio_conf = {
+	.cam_gpiomux_conf_tbl = msm8930_cam_2d_configs,
+	.cam_gpiomux_conf_tbl_size = ARRAY_SIZE(msm8930_cam_2d_configs),
+	.cam_gpio_common_tbl = msm8930_common_cam_gpio,
+	.cam_gpio_common_tbl_size = ARRAY_SIZE(msm8930_common_cam_gpio),
+	.cam_gpio_req_tbl = msm8930_back_cam_gpio,
+	.cam_gpio_req_tbl_size = ARRAY_SIZE(msm8930_back_cam_gpio),
+	.cam_gpio_set_tbl = ov5647_cam_gpio_set_tbl,
+	.cam_gpio_set_tbl_size = ARRAY_SIZE(ov5647_cam_gpio_set_tbl),
+	.cam_gpio_req_init_tbl = ov5647_gpio_req_init_tbl,
+	.cam_gpio_req_init_tbl_size = ARRAY_SIZE(ov5647_gpio_req_init_tbl),
+};
+
+static struct msm_camera_sensor_flash_data flash_ov5647 = {
+	.flash_type = MSM_CAMERA_FLASH_LED,
+	.flash_src = &msm_flash_src
+};
+
+static struct msm_camera_sensor_platform_info sensor_board_info_ov5647 = {
+	.mount_angle	= 90, 
+	.cam_vreg = msm_8930_cam_vreg,
+	.num_vreg = ARRAY_SIZE(msm_8930_cam_vreg),
+	.gpio_conf = &msm_8930_ov5647_cam_gpio_conf,
+	.csi_lane_params = &ov5647_csi_lane_params,
+};
+
+static struct msm_camera_sensor_info msm_camera_sensor_ov5647_data = {
+	.sensor_name	= "ov5647",
+	.pdata	= &msm_camera_csi_device_data[0],
+	.flash_data	= &flash_ov5647,
+	.sensor_platform_info = &sensor_board_info_ov5647,
+	.csi_if	= 1,
+	.camera_type = BACK_CAMERA_2D,
+	.sensor_type          = BAYER_SENSOR, 
+	.actuator_info    = &msm_act_main_cam_5_info,
+};
+static struct gpio msm8930_cam_s5k4e1_gpio[] = {
+	{5, GPIOF_DIR_IN, "CAMIF_MCLK"},
+	{107, GPIOF_DIR_OUT, "CAM_RESET"},
+
+};
+static struct msm_gpio_set_tbl msm8930_cam_s5k4e1_gpio_set_tbl[] = {
+	{107, GPIOF_OUT_INIT_LOW, 1000},
+	{107, GPIOF_OUT_INIT_HIGH, 4000},
+};
+
+static struct msm_gpio_set_tbl s5k4e1_gpio_req_init_tbl[] = {
+	{107, GPIOF_OUT_INIT_LOW, 1000},
+};
+static struct msm_camera_gpio_conf msm_cam_s5k4e1_gpio_conf = {
+	.cam_gpiomux_conf_tbl = msm8930_cam_2d_configs,
+	.cam_gpiomux_conf_tbl_size = ARRAY_SIZE(msm8930_cam_2d_configs),
+	.cam_gpio_common_tbl = msm8930_common_cam_gpio,
+	.cam_gpio_common_tbl_size = ARRAY_SIZE(msm8930_common_cam_gpio),
+	.cam_gpio_req_tbl = msm8930_cam_s5k4e1_gpio,
+	.cam_gpio_req_tbl_size = ARRAY_SIZE(msm8930_cam_s5k4e1_gpio),
+	.cam_gpio_set_tbl = msm8930_cam_s5k4e1_gpio_set_tbl,
+	.cam_gpio_set_tbl_size = ARRAY_SIZE(msm8930_cam_s5k4e1_gpio_set_tbl),
+	.cam_gpio_req_init_tbl = s5k4e1_gpio_req_init_tbl,
+	.cam_gpio_req_init_tbl_size = ARRAY_SIZE(s5k4e1_gpio_req_init_tbl),
+
+};
+
+static struct msm_camera_csi_lane_params s5k4e1_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0xF,
+};
+
+static struct msm_camera_sensor_flash_data flash_s5k4e1 = {
+	.flash_type	     = MSM_CAMERA_FLASH_LED,
+	.flash_src	      = &msm_flash_src
+};
+
+
+static struct msm_camera_sensor_platform_info sensor_board_info_s5k4e1 = {
+	.mount_angle	= 90, 
+	.cam_vreg = msm_8930_cam_vreg,
+	.num_vreg = ARRAY_SIZE(msm_8930_cam_vreg),
+	.gpio_conf = &msm_cam_s5k4e1_gpio_conf,
+	.csi_lane_params = &s5k4e1_csi_lane_params,
+
+};
+
+static struct msm_actuator_info msm_act_main_cam_4_info = {
+	.board_info     = &msm_act_main_cam_i2c_info,
+	.cam_name   = MSM_ACTUATOR_MAIN_CAM_4,
+	.bus_id         = MSM_8930_GSBI4_QUP_I2C_BUS_ID,
+	.vcm_pwd        = 13,
+	.vcm_enable     = 1,
+};
+
+
+static struct msm_camera_sensor_info msm_camera_sensor_s5k4e1_data = {
+	.sensor_name	= "s5k4e1",
+	.pdata	= &msm_camera_csi_device_data[0],
+	.flash_data	= &flash_s5k4e1,
+	.sensor_platform_info = &sensor_board_info_s5k4e1,
+	.csi_if	= 1,
+	.camera_type = BACK_CAMERA_2D,
+	.sensor_type          = BAYER_SENSOR, 
+	.actuator_info    = &msm_act_main_cam_4_info,
+};
+
+static struct msm_camera_csi_lane_params s5k5ca_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0xF,
+};
+static struct msm_gpio_set_tbl s5k5ca_gpio_req_init_tbl[] = {
+	{54, GPIOF_OUT_INIT_HIGH, 0},  //set the flag of gpio, then usleep the times
+	{107, GPIOF_OUT_INIT_LOW, 10000},
+};
+static struct msm_gpio_set_tbl s5k5ca_cam_gpio_set_tbl[] = {
+	{54, GPIOF_OUT_INIT_LOW, 20000},  //set the flag of gpio, then usleep the times
+	{107, GPIOF_OUT_INIT_HIGH, 20000},
+};
+/* power down config table */
+static struct msm_gpio_set_tbl s5k5ca_cam_gpio_config_tbl_power_down[] = {
+	{107, GPIOF_OUT_INIT_LOW, 20000},
+	{54, GPIOF_OUT_INIT_HIGH, 150000},
+};
+static struct msm_camera_gpio_conf msm_8930_s5k5ca_cam_gpio_conf = {
+	.cam_gpiomux_conf_tbl = msm8930_cam_2d_configs,
+	.cam_gpiomux_conf_tbl_size = ARRAY_SIZE(msm8930_cam_2d_configs),
+	.cam_gpio_common_tbl = msm8930_common_cam_gpio,
+	.cam_gpio_common_tbl_size = ARRAY_SIZE(msm8930_common_cam_gpio),
+	.cam_gpio_req_tbl = msm8930_back_cam_gpio,
+	.cam_gpio_req_tbl_size = ARRAY_SIZE(msm8930_back_cam_gpio),
+	.cam_gpio_set_tbl = s5k5ca_cam_gpio_set_tbl,
+	.cam_gpio_set_tbl_size = ARRAY_SIZE(s5k5ca_cam_gpio_set_tbl),
+	.cam_gpio_req_init_tbl = s5k5ca_gpio_req_init_tbl,
+	.cam_gpio_req_init_tbl_size = ARRAY_SIZE(s5k5ca_gpio_req_init_tbl),
+	.cam_gpio_config_tbl_power_down = s5k5ca_cam_gpio_config_tbl_power_down,
+	.cam_gpio_config_tbl_power_down_size = ARRAY_SIZE(s5k5ca_cam_gpio_config_tbl_power_down),
+};
+
+/* Add flash for s5k5ca, change FLASH_NONE to FLASH_LED */
+static struct msm_camera_sensor_flash_data flash_s5k5ca = {
+	.flash_type = MSM_CAMERA_FLASH_LED,
+	.flash_src = &msm_flash_src
+};
+static struct camera_vreg_t msm_8930_cam_vreg_s5k5ca[] = {
+	{"cam_iovdd", REG_VS, 0, 0, 0,300},
+	{"cam_avdd", REG_LDO, 2800000, 2850000, 85600},
+};
+static struct msm_camera_sensor_platform_info sensor_board_info_s5k5ca = {
+	.mount_angle	= 90, 
+	.cam_vreg = msm_8930_cam_vreg_s5k5ca,
+	.num_vreg = ARRAY_SIZE(msm_8930_cam_vreg_s5k5ca),
+	.gpio_conf = &msm_8930_s5k5ca_cam_gpio_conf,
+	.csi_lane_params = &s5k5ca_csi_lane_params,
+};
+static struct msm_camera_sensor_info msm_camera_sensor_s5k5ca_data = {
+	.sensor_name	= "s5k5ca",
+	.pdata	= &msm_camera_csi_device_data[0],
+	.flash_data	= &flash_s5k5ca,
+	.sensor_platform_info = &sensor_board_info_s5k5ca,
+	.csi_if	= 1,
+	.camera_type = BACK_CAMERA_2D,
+	.sensor_type          = YUV_SENSOR, 
+	.actuator_info    = NULL,
+	.standby_is_supported = 1,
+	.en_clk_first=1,
+	.sensor_pwd= 54,
+};
+static struct msm_camera_csi_lane_params mt9t113_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0xF,
+};
+
+static struct msm_gpio_set_tbl mt9t113_cam_gpio_set_tbl[] = {
+	{107, GPIOF_OUT_INIT_LOW, 20000},  //set the flag of gpio, then usleep the times
+	{107, GPIOF_OUT_INIT_HIGH, 20000},
+};
+
+static struct msm_gpio_set_tbl mt9t113_gpio_req_init_tbl[] = {
+	{107, GPIOF_OUT_INIT_HIGH, 0},  //set the flag of gpio, then usleep the times
+	{54, GPIOF_OUT_INIT_LOW, 10000},
+};
+
+static struct msm_camera_gpio_conf msm_8930_mt9t113_cam_gpio_conf = {
+	.cam_gpiomux_conf_tbl = msm8930_cam_2d_configs,
+	.cam_gpiomux_conf_tbl_size = ARRAY_SIZE(msm8930_cam_2d_configs),
+	.cam_gpio_common_tbl = msm8930_common_cam_gpio,
+	.cam_gpio_common_tbl_size = ARRAY_SIZE(msm8930_common_cam_gpio),
+	.cam_gpio_req_tbl = msm8930_back_cam_gpio,
+	.cam_gpio_req_tbl_size = ARRAY_SIZE(msm8930_back_cam_gpio),
+	.cam_gpio_set_tbl = mt9t113_cam_gpio_set_tbl,
+	.cam_gpio_set_tbl_size = ARRAY_SIZE(mt9t113_cam_gpio_set_tbl),
+	.cam_gpio_req_init_tbl = mt9t113_gpio_req_init_tbl,
+	.cam_gpio_req_init_tbl_size = ARRAY_SIZE(mt9t113_gpio_req_init_tbl),
+};
+
+static struct msm_camera_sensor_flash_data flash_mt9t113 = {
+	.flash_type = MSM_CAMERA_FLASH_NONE,
+	.flash_src = &msm_flash_src
+};
+
+static struct msm_camera_sensor_platform_info sensor_board_info_mt9t113 = {
+	.mount_angle	= 90, 
+	.cam_vreg = msm_8930_cam_vreg,
+	.num_vreg = ARRAY_SIZE(msm_8930_cam_vreg),
+	.gpio_conf = &msm_8930_mt9t113_cam_gpio_conf,
+	.csi_lane_params = &mt9t113_csi_lane_params,
+};
+
+static struct msm_camera_sensor_info msm_camera_sensor_mt9t113_data = {
+	.sensor_name	= "mt9t113",
+	.pdata	= &msm_camera_csi_device_data[0],
+	.flash_data	= &flash_mt9t113,
+	.sensor_platform_info = &sensor_board_info_mt9t113,
+	.csi_if	= 1,
+	.camera_type = BACK_CAMERA_2D,
+	.sensor_type          = YUV_SENSOR, 
+	.actuator_info    = NULL,
+};
 static struct platform_device msm_camera_server = {
 	.name = "msm_cam_server",
 	.id = 0,
 };
+
+static struct msm_gpio_set_tbl msm8930_cam_imx188_gpio_set_tbl[] = {
+	{76, GPIOF_OUT_INIT_HIGH, 1000},
+};
+
+static struct msm_gpio_set_tbl imx188_gpio_req_init_tbl[] = {
+	{76, GPIOF_OUT_INIT_LOW, 1000},
+};
+
+static struct msm_camera_gpio_conf msm_cam_imx188_gpio_conf = {
+	.cam_gpiomux_conf_tbl = msm8930_cam_2d_configs,
+	.cam_gpiomux_conf_tbl_size = ARRAY_SIZE(msm8930_cam_2d_configs),
+	.cam_gpio_common_tbl = msm8930_common_cam_gpio,
+	.cam_gpio_common_tbl_size = ARRAY_SIZE(msm8930_common_cam_gpio),
+	.cam_gpio_req_tbl = msm8930_front_cam_gpio,
+	.cam_gpio_req_tbl_size = ARRAY_SIZE(msm8930_front_cam_gpio),
+	.cam_gpio_set_tbl = msm8930_cam_imx188_gpio_set_tbl,
+	.cam_gpio_set_tbl_size = ARRAY_SIZE(msm8930_cam_imx188_gpio_set_tbl),
+	.cam_gpio_req_init_tbl = imx188_gpio_req_init_tbl,
+	.cam_gpio_req_init_tbl_size = ARRAY_SIZE(imx188_gpio_req_init_tbl),
+
+};
+
+static struct msm_camera_csi_lane_params imx188_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0xF,
+};
+
+static struct msm_camera_sensor_flash_data flash_imx188 = {
+	.flash_type	     = MSM_CAMERA_FLASH_NONE,
+	.flash_src	      = &msm_flash_src
+};
+
+static struct msm_camera_sensor_platform_info sensor_board_info_imx188 = {
+	.mount_angle	= 270, 
+	.cam_vreg = msm_imx188_cam_vreg,
+	.num_vreg = ARRAY_SIZE(msm_imx188_cam_vreg),
+	.gpio_conf = &msm_cam_imx188_gpio_conf,
+	.csi_lane_params = &imx188_csi_lane_params,
+
+};
+
+static struct msm_camera_sensor_info msm_camera_sensor_imx188_data = {
+	.sensor_name	= "imx188",
+	.pdata	= &msm_camera_csi_device_data[1],
+	.flash_data	= &flash_imx188,
+	.sensor_platform_info = &sensor_board_info_imx188,
+	.csi_if	= 1,
+	.camera_type = FRONT_CAMERA_2D,
+	.sensor_type          = BAYER_SENSOR, 
+	.actuator_info    = NULL,
+};
+
+#ifdef CONFIG_IMX134
+static struct msm_camera_csi_lane_params imx134_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0xF,
+};
+
+static struct camera_vreg_t msm_imx134_cam_vreg[] = {
+	{"cam_avdd", REG_LDO, 2850000, 2850000, 85600,0},
+	{"cam_iovdd", REG_VS, 0, 0, 0,0},
+	{"cam_dvdd", REG_LDO, 1100000, 1100000,200000,2000},
+};
+
+static struct msm_gpio_set_tbl imx134_cam_gpio_set_tbl[] = {
+	{107, GPIOF_OUT_INIT_HIGH, 2000}, //RESET
+};
+static struct msm_gpio_set_tbl imx134_gpio_req_init_tbl[] = {
+	{107, GPIOF_OUT_INIT_LOW, 2000},
+};
+static struct msm_gpio_set_tbl imx134_gpio_power_down_tbl[] = {
+	{107, GPIOF_OUT_INIT_LOW, 2000},
+};
+
+static struct msm_actuator_info msm_act_main_cam_6_info = {
+	.board_info     = &msm_act_main_cam_i2c_info,
+	.cam_name       = MSM_ACTUATOR_MAIN_CAM_6,
+	.bus_id         = MSM_8930_GSBI4_QUP_I2C_BUS_ID,
+	.vcm_pwd        = 13,
+	.vcm_enable     = 1,
+};
+
+static struct msm_camera_gpio_conf msm_8930_imx134_cam_gpio_conf = {
+	.cam_gpiomux_conf_tbl = msm8930_cam_2d_configs,
+	.cam_gpiomux_conf_tbl_size = ARRAY_SIZE(msm8930_cam_2d_configs),
+	.cam_gpio_common_tbl = msm8930_common_cam_gpio,
+	.cam_gpio_common_tbl_size = ARRAY_SIZE(msm8930_common_cam_gpio),
+	.cam_gpio_req_tbl = msm8930_back_cam_gpio,
+	.cam_gpio_req_tbl_size = ARRAY_SIZE(msm8930_back_cam_gpio),
+	.cam_gpio_set_tbl = imx134_cam_gpio_set_tbl,
+	.cam_gpio_set_tbl_size = ARRAY_SIZE(imx134_cam_gpio_set_tbl),
+	.cam_gpio_req_init_tbl = imx134_gpio_req_init_tbl,
+	.cam_gpio_req_init_tbl_size = ARRAY_SIZE(imx134_gpio_req_init_tbl),
+	.cam_gpio_config_tbl_power_down = imx134_gpio_power_down_tbl,
+	.cam_gpio_config_tbl_power_down_size = ARRAY_SIZE(imx134_gpio_power_down_tbl),
+};
+
+static struct msm_camera_sensor_flash_data flash_imx134 = {
+	.flash_type = MSM_CAMERA_FLASH_LED,
+	.flash_src = &msm_flash_src
+};
+
+static struct msm_camera_sensor_platform_info sensor_board_info_imx134 = {
+	.mount_angle	= 90, 
+	.cam_vreg = msm_imx134_cam_vreg,
+	.num_vreg = ARRAY_SIZE(msm_imx134_cam_vreg),
+	.gpio_conf = &msm_8930_imx134_cam_gpio_conf,
+	.csi_lane_params = &imx134_csi_lane_params,
+};
+
+static struct msm_camera_sensor_info msm_camera_sensor_imx134_data = {
+	.sensor_name	= "imx134",
+	.pdata	= &msm_camera_csi_device_data[0],
+	.flash_data	= &flash_imx134,
+	.sensor_platform_info = &sensor_board_info_imx134,
+	.csi_if	= 1,
+	.camera_type = BACK_CAMERA_2D,
+	.sensor_type          = BAYER_SENSOR, 
+	.actuator_info    = &msm_act_main_cam_6_info,
+};
+#endif
+
+static struct msm_gpio_set_tbl msm8930_cam_ov9724_gpio_set_tbl[] = {
+	{76, GPIOF_OUT_INIT_HIGH, 1000},
+};
+
+static struct msm_gpio_set_tbl ov9724_gpio_req_init_tbl[] = {
+	{76, GPIOF_OUT_INIT_LOW, 1000},
+};
+
+static struct msm_camera_gpio_conf msm_cam_ov9724_gpio_conf = {
+	.cam_gpiomux_conf_tbl = msm8930_cam_2d_configs,
+	.cam_gpiomux_conf_tbl_size = ARRAY_SIZE(msm8930_cam_2d_configs),
+	.cam_gpio_common_tbl = msm8930_common_cam_gpio,
+	.cam_gpio_common_tbl_size = ARRAY_SIZE(msm8930_common_cam_gpio),
+	.cam_gpio_req_tbl = msm8930_front_cam_gpio,
+	.cam_gpio_req_tbl_size = ARRAY_SIZE(msm8930_front_cam_gpio),
+	.cam_gpio_set_tbl = msm8930_cam_ov9724_gpio_set_tbl,
+	.cam_gpio_set_tbl_size = ARRAY_SIZE(msm8930_cam_ov9724_gpio_set_tbl),
+	.cam_gpio_req_init_tbl = ov9724_gpio_req_init_tbl,
+	.cam_gpio_req_init_tbl_size = ARRAY_SIZE(ov9724_gpio_req_init_tbl),
+};
+
+static struct msm_camera_csi_lane_params ov9724_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0xF,
+};
+
+static struct msm_camera_sensor_flash_data flash_ov9724 = {
+	.flash_type	     = MSM_CAMERA_FLASH_NONE,
+	.flash_src	      = &msm_flash_src
+};
+
+static struct msm_camera_sensor_platform_info sensor_board_info_ov9724 = {
+	.mount_angle	= 270, 
+	.cam_vreg = msm_ov9724_cam_vreg,
+	.num_vreg = ARRAY_SIZE(msm_ov9724_cam_vreg),
+	.gpio_conf = &msm_cam_ov9724_gpio_conf,
+	.csi_lane_params = &ov9724_csi_lane_params,
+};
+
+static struct msm_camera_sensor_info msm_camera_sensor_ov9724_data = {
+	.sensor_name	= "ov9724",
+	.pdata	= &msm_camera_csi_device_data[1],
+	.flash_data	= &flash_ov9724,
+	.sensor_platform_info = &sensor_board_info_ov9724,
+	.csi_if	= 1,
+	.camera_type = FRONT_CAMERA_2D,
+	.sensor_type          = BAYER_SENSOR, 
+	.actuator_info    = NULL,
+};
+
+
+
+#ifdef CONFIG_S5K9A1
+
+static struct msm_camera_sensor_flash_data flash_s5k9a1 = {
+	.flash_type = MSM_CAMERA_FLASH_NONE,
+};
+/* Since main camear use same DVDD with slave camera, 
+ * modify the DVDD to accommodate main camera votage. 
+ */
+static struct camera_vreg_t msm_8930_cam_vreg_s5k9a1[] = {
+	{"cam_avdd", REG_LDO, 2850000, 2850000, 85600,0},
+	{"cam_iovdd", REG_VS, 0, 0, 0,1000},
+    {"cam_dvdd", REG_LDO, 1150000, 1150000,0,10},
+};
+
+
+// TODO: to check the init status of each GPIO
+
+static struct msm_gpio_set_tbl msm8930_cam_s5k9a1_gpio_set_tbl[] = {
+	{76, GPIOF_OUT_INIT_HIGH, 1000},
+};
+
+static struct msm_gpio_set_tbl s5k9a1_gpio_req_init_tbl[] = {
+	{76, GPIOF_OUT_INIT_LOW, 1000},
+};
+
+static struct msm_camera_gpio_conf msm_8930_s5k9a1_cam_gpio_conf = {
+	.cam_gpiomux_conf_tbl = msm8930_cam_2d_configs,
+	.cam_gpiomux_conf_tbl_size = ARRAY_SIZE(msm8930_cam_2d_configs),
+	.cam_gpio_common_tbl = msm8930_common_cam_gpio,
+	.cam_gpio_common_tbl_size = ARRAY_SIZE(msm8930_common_cam_gpio),
+	.cam_gpio_req_tbl = msm8930_front_cam_gpio,
+	.cam_gpio_req_tbl_size = ARRAY_SIZE(msm8930_front_cam_gpio),
+	.cam_gpio_set_tbl = msm8930_cam_s5k9a1_gpio_set_tbl,
+	.cam_gpio_set_tbl_size = ARRAY_SIZE(msm8930_cam_s5k9a1_gpio_set_tbl),
+	.cam_gpio_req_init_tbl = s5k9a1_gpio_req_init_tbl,
+	.cam_gpio_req_init_tbl_size = ARRAY_SIZE(s5k9a1_gpio_req_init_tbl),
+};
+
+static struct msm_camera_csi_lane_params s5k9a1_csi_lane_params = {
+	.csi_lane_assign = 0xE4,
+	.csi_lane_mask = 0xF,
+};
+
+static struct msm_camera_sensor_platform_info sensor_board_info_s5k9a1 = {
+    // TODO:  need to check the mout type
+	.mount_angle	= 270, 
+	.cam_vreg = msm_8930_cam_vreg_s5k9a1,
+	.num_vreg = ARRAY_SIZE(msm_8930_cam_vreg_s5k9a1),
+	.gpio_conf = &msm_8930_s5k9a1_cam_gpio_conf,
+	.csi_lane_params = &s5k9a1_csi_lane_params,
+};
+
+static struct msm_camera_sensor_info msm_camera_sensor_s5k9a1_data = {
+    .sensor_name    = "s5k9a1",
+    .pdata  = &msm_camera_csi_device_data[1],/* front sensor hardware connection is csi[1] */
+    .flash_data = &flash_s5k9a1,
+    .sensor_platform_info = &sensor_board_info_s5k9a1,
+    .csi_if = 1,
+    .camera_type = FRONT_CAMERA_2D,
+    .sensor_type          = BAYER_SENSOR, 
+    .actuator_info    = NULL,
+};
+#endif
+
+
+
 
 void __init msm8930_init_cam(void)
 {
@@ -659,11 +1296,11 @@ void __init msm8930_init_cam(void)
 #ifdef CONFIG_I2C
 struct i2c_board_info msm8930_camera_i2c_boardinfo[] = {
 	{
-	I2C_BOARD_INFO("imx074", 0x1A),
+	//I2C_BOARD_INFO("imx074", 0x1A),
 	.platform_data = &msm_camera_sensor_imx074_data,
-	},
+	},	
 	{
-	I2C_BOARD_INFO("ov2720", 0x6C),
+	//I2C_BOARD_INFO("ov2720", 0x6C),
 	.platform_data = &msm_camera_sensor_ov2720_data,
 	},
 	{
@@ -671,11 +1308,70 @@ struct i2c_board_info msm8930_camera_i2c_boardinfo[] = {
 	.platform_data = &msm_camera_sensor_mt9m114_data,
 	},
 	{
-	I2C_BOARD_INFO("s5k3l1yx", 0x20),
+	//I2C_BOARD_INFO("s5k3l1yx", 0x20),
 	.platform_data = &msm_camera_sensor_s5k3l1yx_data,
 	},
 	{
-	I2C_BOARD_INFO("tps61310", 0x66),
+	I2C_BOARD_INFO("mt9e013", 0x6C),
+	.platform_data = &msm_camera_sensor_mt9e013_data,
+	},
+	{
+		I2C_BOARD_INFO("s5k4e1", 0x37),
+		.platform_data = &msm_camera_sensor_s5k4e1_data,
+ 	},
+
+	/*delete tps61310  define*/
+#ifdef CONFIG_GC0313
+	{
+		I2C_BOARD_INFO("gc0313", 0x42),
+		.platform_data = &msm_camera_sensor_gc0313_data,
+	},
+#endif	
+	/*attention:the actual i2c addr : 0xdc!*/
+#ifdef CONFIG_BF3905
+	{
+		I2C_BOARD_INFO("bf3905", 0x6e),
+		.platform_data = &msm_camera_sensor_bf3905_data,
+	},
+#endif
+
+	{
+	I2C_BOARD_INFO("mt9v113", 0x7A),
+	.platform_data = &msm_camera_sensor_mt9v113_data,
+	},
+	{
+	I2C_BOARD_INFO("ov5647", 0x36),
+	.platform_data = &msm_camera_sensor_ov5647_data,
+	},
+	{
+	I2C_BOARD_INFO("s5k5ca", 0x5A),
+	.platform_data = &msm_camera_sensor_s5k5ca_data,
+	},
+
+#ifdef CONFIG_S5K9A1
+	{
+	I2C_BOARD_INFO("s5k9a1", 0x50),
+	.platform_data = &msm_camera_sensor_s5k9a1_data,
+	},
+#endif
+    
+	{
+	I2C_BOARD_INFO("mt9t113", 0x78),
+	.platform_data = &msm_camera_sensor_mt9t113_data,
+	},
+	{
+	I2C_BOARD_INFO("imx188", 0x34),
+	.platform_data = &msm_camera_sensor_imx188_data,
+	},
+#ifdef CONFIG_IMX134
+	{
+	I2C_BOARD_INFO("imx134", 0x20),
+	.platform_data = &msm_camera_sensor_imx134_data,
+	},
+#endif
+	{
+	I2C_BOARD_INFO("ov9724", 0x1B),
+	.platform_data = &msm_camera_sensor_ov9724_data,
 	},
 };
 

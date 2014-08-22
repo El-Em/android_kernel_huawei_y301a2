@@ -924,6 +924,10 @@ static ssize_t fsg_store_file(struct device *dev, struct device_attribute *attr,
 	struct rw_semaphore	*filesem = dev_get_drvdata(dev);
 	int		rc = 0;
 
+    /* for easy to debug ,add a log here */
+#ifdef CONFIG_HUAWEI_KERNEL
+    LERROR(curlun,">>>>>>>> %s: buf=%s\n", __func__, buf);    
+#endif
 
 #ifndef CONFIG_USB_ANDROID_MASS_STORAGE
 	/* disabled in android because we need to allow closing the backing file

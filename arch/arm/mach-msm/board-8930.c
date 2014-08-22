@@ -101,12 +101,115 @@
 #include "msm_watchdog.h"
 #include "board-8930.h"
 #include "acpuclock-krait.h"
+#ifdef CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4
+#include <linux/cyttsp4_bus.h>
+#include <linux/cyttsp4_core.h>
+#include <linux/cyttsp4_btn.h>
+#include <linux/cyttsp4_mt.h>
+#endif
+#ifdef CONFIG_HUAWEI_KERNEL
+#include "hw-board-8930.h"
+#endif
+#ifdef CONFIG_HW_POWER_TREE 
+struct hw_config_power_tree* config_power_tree_pdata = NULL;
+struct regulator_init_data* msm_saw_regulator_pdata__ = NULL;
+struct gpio_regulator_platform_data* msm_gpio_regulator_pdata__ = NULL;
+#endif
+
+#ifdef CONFIG_HUAWEI_KERNEL
+#include <asm-arm/huawei/smem_vendor_huawei.h>
+#endif
 
 static struct platform_device msm_fm_platform_init = {
 	.name = "iris_fm",
 	.id   = -1,
 };
+#ifdef CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4
 
+#ifdef CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_INCLUDE_FW
+#include "linux/cyttsp4_img.h"
+static struct cyttsp4_touch_firmware cyttsp4_firmware = {
+	.img = cyttsp4_img,
+	.size = ARRAY_SIZE(cyttsp4_img),
+	.ver = cyttsp4_ver,
+	.vsize = ARRAY_SIZE(cyttsp4_ver),
+};
+#else
+static struct cyttsp4_touch_firmware cyttsp4_firmware = {
+	.img = NULL,
+	.size = 0,
+	.ver = NULL,
+	.vsize = 0,
+};
+#endif
+
+static struct touch_settings cyttsp4_sett_param_regs = {
+	.data = NULL,
+	.size = 0,
+	.tag = 0,
+};
+
+static struct touch_settings cyttsp4_sett_param_size = {
+	.data = NULL,
+	.size = 0,
+	.tag = 0,
+};
+
+struct cyttsp4_sett_param_map cyttsp4_config_param_map[] = {
+	[0] = {
+			  .id = 0,
+			  .param = NULL,
+		  },
+	
+	[1] = {
+			  .id = 2,
+			  .param = NULL,
+		  },
+	
+	[2] = {
+			  .param = NULL,
+		  },
+};
+
+
+static struct cyttsp4_loader_platform_data _cyttsp4_loader_platform_data = {
+	.fw = &cyttsp4_firmware,
+	.param_regs = &cyttsp4_sett_param_regs,
+	.param_size = &cyttsp4_sett_param_size,
+	.param_map = cyttsp4_config_param_map,
+	.flags = 1,
+};
+
+#define CYTTSP4_USE_I2C
+
+#ifdef CYTTSP4_USE_I2C
+#define CYTTSP4_I2C_NAME "cyttsp4_i2c_adapter"
+#define CYTTSP4_I2C_TCH_ADR 0x1A
+#define CYTTSP4_LDR_TCH_ADR 0x1A
+#define CYTTSP4_I2C_IRQ_GPIO  82 /* J6.9, C19, GPMC_AD14/GPIO_38 */
+#define CYTTSP4_I2C_RST_GPIO  96 /* J6.10, D18, GPMC_AD13/GPIO_37 */
+#endif
+#define CY4_MAXX 720
+#define CY4_MAXY 1280
+
+#define CY4_MINX 0
+#define CY4_MINY 0
+
+#define CY4_ABS_MIN_X CY4_MINX
+#define CY4_ABS_MIN_Y CY4_MINY
+#define CY4_ABS_MAX_X CY4_MAXX
+#define CY4_ABS_MAX_Y CY4_MAXY
+#define CY4_ABS_MIN_P 0
+#define CY4_ABS_MAX_P 255
+#define CY4_ABS_MIN_W 0
+#define CY4_ABS_MAX_W 255
+
+#define CY4_ABS_MIN_T 0
+
+#define CY4_ABS_MAX_T 15
+#define CY_IGNORE_VALUE 0xFFFF
+/* Cypress cyttsp4 end */
+#endif
 #define KS8851_RST_GPIO		89
 #define KS8851_IRQ_GPIO		90
 #define HAP_SHIFT_LVL_OE_GPIO	47
@@ -173,6 +276,7 @@ struct sx150x_platform_data msm8930_sx150x_data[] = {
 #define MSM_ION_HEAP_NUM	1
 #endif
 
+/*deleted unused code.*/
 #ifdef CONFIG_KERNEL_MSM_CONTIG_MEM_REGION
 static unsigned msm_contig_mem_size = MSM_CONTIG_MEM_SIZE;
 static int __init msm_contig_mem_size_setup(char *p)
@@ -451,6 +555,113 @@ static struct platform_device msm8930_ion_dev = {
 };
 #endif
 
+#ifdef CONFIG_HUAWEI_KERNEL
+static struct msm_xo_voter *bcm2079x_nfc_clock = NULL;
+
+/* nfc clock control
+ * vote:0 - close for clock pin request mode 
+ *      1 - set for clock pin request mode   */
+int bcm2079x_clock_output_ctrl(int vote)
+{
+    int rc = 0;
+    const char * id = "bcm_nfc";
+
+    if (bcm2079x_nfc_clock == NULL) 
+	{
+    	printk("%s in: vote is null!\n",__func__);
+        bcm2079x_nfc_clock = msm_xo_get(MSM_XO_TCXO_D1, id);
+        if (IS_ERR(bcm2079x_nfc_clock))
+		{
+            rc = PTR_ERR(bcm2079x_nfc_clock);
+            pr_err("Failed to get TCXO_D1 voter (%ld)\n", PTR_ERR(bcm2079x_nfc_clock));
+            goto fail_xo_get;
+        }
+    }
+
+    if (vote == 0)
+    {
+        rc = msm_xo_mode_vote(bcm2079x_nfc_clock, MSM_XO_MODE_OFF);
+        printk("%s: clock pin ctrl off! rc=%d!\n",__func__, rc);
+        if (rc < 0)
+        {
+            pr_err("Configuring TCXO to MSM_XO_MODE_OFF failed  (%d)\n", rc);
+			goto fail_xo_mode_vote;
+        }        
+        return rc;
+    }
+	
+    rc = msm_xo_mode_vote(bcm2079x_nfc_clock, MSM_XO_MODE_PIN_CTRL);
+    printk("%s: clock pin ctrl on! rc=%d!\n",__func__, rc);
+    if (rc < 0) 
+	{
+        pr_err("Configuring TCXO to MSM_XO_MODE_PIN_CTRL failed  (%d)\n", rc);
+        goto fail_xo_mode_vote;
+    } 
+    return rc;
+ 
+    
+fail_xo_mode_vote:
+    msm_xo_put(bcm2079x_nfc_clock);
+fail_xo_get:
+
+    printk("%s: failed! rc=%d!\n",__func__, rc);
+    return rc;
+}
+
+/* configure nfc ven pin to 1.8v */
+static struct pm_gpio bcm_nfc_ven_cfg = {
+    .direction        = PM_GPIO_DIR_OUT,
+    .output_buffer    = PM_GPIO_OUT_BUF_CMOS,
+    .output_value     = 0,
+    .pull             = PM_GPIO_PULL_NO,
+    .vin_sel          = PM8038_GPIO_VIN_L11,
+    .out_strength     = PM_GPIO_STRENGTH_HIGH,
+    .function         = PM_GPIO_FUNC_NORMAL,
+    .inv_int_pol      = 0,
+    .disable_pin      = 0,
+};
+
+/* this function is used to configure nfc ven pin to 1.8v */
+int bcm2079x_ven_cfg(void)
+{	
+    int ret = 0;
+
+    ret = pm8xxx_gpio_config(PM8038_GPIO_PM_TO_SYS(BCM_NFC_VEN), &bcm_nfc_ven_cfg);   	
+    if (ret != 0) 
+    {
+        printk("%s: Nfc ven gpio config fail, ret = %d\n",__func__, ret);
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+1. NFC_VEN      PM(GPIO_2)
+2. NFC_WAKE     MSM8930(GPIO_24)
+3. CLK_REQ_NFC  PM£¨MPP_06£©
+4. I2C5_DATA    MSM8930(GPIO_95)
+5. I2C5_CLK     MSM8930(GPIO_96)
+6. NFC_INT      MSM8930(GPIO_106)
+7. TCXO_OUT_NFC PM(XO_OUT_D1)
+*/
+static struct bcm2079x_platform_data bcm2079x_pdata = {
+	.irq_gpio = BCM_NFC_IRQ,//NFC_IRQ,
+	.en_gpio = PM8038_GPIO_PM_TO_SYS(BCM_NFC_VEN),//NFC_EN,
+	.wake_gpio = BCM_NFC_WAKE,//NFC_FIRM,
+	.clock_output_ctrl = bcm2079x_clock_output_ctrl,  //NFC clock control
+	.ven_cfg = bcm2079x_ven_cfg, //nfc ven cfg
+};
+
+static struct i2c_board_info nfc_bcm2079x[] __initdata = {
+	{
+		I2C_BOARD_INFO("bcm2079x-i2c", BCM_NFC_I2C_ADD),
+		.irq = MSM_GPIO_TO_INT(BCM_NFC_IRQ),//IRQ_EINT(12),
+		.platform_data = &bcm2079x_pdata,
+	},
+};
+#endif
+
 struct platform_device msm8930_fmem_device = {
 	.name = "fmem",
 	.id = 1,
@@ -585,7 +796,7 @@ static void __init reserve_ion_memory(void)
 	/* Since the fixed area may be carved out of lowmem,
 	 * make sure the length is a multiple of 1M.
 	 */
-	fixed_size = (fixed_size + MSM_MM_FW_SIZE + SECTION_SIZE - 1)
+	fixed_size = (fixed_size + HOLE_SIZE + SECTION_SIZE - 1)
 		& SECTION_MASK;
 	msm8930_reserve_fixed_area(fixed_size);
 
@@ -749,10 +960,62 @@ static int __init ext_display_setup(char *param)
 }
 early_param("ext_display", ext_display_setup);
 
+/* define size of reserve memory is 1M */
+#ifdef CONFIG_SRECORDER_MSM
+#define SRECORDER_RESERVED_MEM_SIZE (SZ_1M)
+
+/* define start address of reserve memory */
+static unsigned long s_srecorder_reserved_mem_phys_start_addr = 0x0;
+
+/*
+ * Function:       unsigned long get_srecorder_reserved_mem_size(void)
+ * Description:    get size of reserve memory
+ * Return:         SRECORDER_RESERVED_MEM_SIZE: size of reserve memory
+ */
+unsigned long get_srecorder_reserved_mem_size(void)
+{
+    return SRECORDER_RESERVED_MEM_SIZE;
+}
+
+/*
+ * Function:       unsigned long get_mempools_pstart_addr(void)
+ * Description:    get start address of reserve memory
+ * Return:         s_srecorder_reserved_mem_phys_start_addr:start address of reserve memory
+ */
+unsigned long get_srecorder_reserved_mem_phys_start_addr(void)
+{
+    return s_srecorder_reserved_mem_phys_start_addr;
+}
+
+extern unsigned long get_mempools_pstart_addr(void);
+#endif /* CONFIG_SRECORDER_MSM */
+
 static void __init msm8930_reserve(void)
 {
 	msm8930_set_display_params(prim_panel_name, ext_panel_name);
 	msm_reserve();
+
+#ifdef CONFIG_SRECORDER_MSM
+    if (0x0 != get_mempools_pstart_addr())
+    {
+        s_srecorder_reserved_mem_phys_start_addr = get_mempools_pstart_addr() - 10 * SRECORDER_RESERVED_MEM_SIZE;
+        if (0 == memblock_remove(s_srecorder_reserved_mem_phys_start_addr, SRECORDER_RESERVED_MEM_SIZE))
+        {
+            printk("<<<< Allocate 0x%08lx bytes starting form 0x%08lx for S-Recorder\n", (unsigned long)SRECORDER_RESERVED_MEM_SIZE, 
+                s_srecorder_reserved_mem_phys_start_addr);
+        }
+        else
+        {
+            s_srecorder_reserved_mem_phys_start_addr = 0x0;
+            printk(">>>> No sufficient mem for S-Recorder!\n");
+        }
+    }
+    else
+    {
+        printk(">>>> Can't know the start address for S-Recorder's reserved memory!\n");
+    }
+#endif /* CONFIG_SRECORDER_MSM */
+
 	if (msm8930_fmem_pdata.size) {
 #if defined(CONFIG_ION_MSM) && defined(CONFIG_MSM_MULTIMEDIA_USE_ION)
 		if (reserve_info->fixed_area_size) {
@@ -872,7 +1135,7 @@ static struct wcd9xxx_pdata sitar1p1_platform_data = {
 		.cfilt2_mv = 1800,
 		.bias1_cfilt_sel = SITAR_CFILT1_SEL,
 		.bias2_cfilt_sel = SITAR_CFILT2_SEL,
-		.bias1_cap_mode = MICBIAS_EXT_BYP_CAP,
+		.bias1_cap_mode = MICBIAS_NO_EXT_BYP_CAP,
 		.bias2_cap_mode = MICBIAS_NO_EXT_BYP_CAP,
 	},
 	.regulator = {
@@ -1046,6 +1309,27 @@ static struct msm_bus_vectors qseecom_enable_sfpb_vectors[] = {
 	},
 };
 
+static struct msm_bus_vectors qseecom_enable_dfab_sfpb_vectors[] = {
+	{
+		.src = MSM_BUS_MASTER_SPS,
+		.dst = MSM_BUS_SLAVE_EBI_CH0,
+		.ib = (492 * 8) * 1000000UL,
+		.ab = (492 * 8) *  100000UL,
+	},
+	{
+		.src = MSM_BUS_MASTER_SPS,
+		.dst = MSM_BUS_SLAVE_SPS,
+		.ib = (492 * 8) * 1000000UL,
+		.ab = (492 * 8) *  100000UL,
+	},
+	{
+		.src = MSM_BUS_MASTER_SPDM,
+		.dst = MSM_BUS_SLAVE_SPDM,
+		.ib = (64 * 8) * 1000000UL,
+		.ab = (64 * 8) *  100000UL,
+	},
+};
+
 static struct msm_bus_paths qseecom_hw_bus_scale_usecases[] = {
 	{
 		ARRAY_SIZE(qseecom_clks_init_vectors),
@@ -1058,6 +1342,10 @@ static struct msm_bus_paths qseecom_hw_bus_scale_usecases[] = {
 	{
 		ARRAY_SIZE(qseecom_enable_sfpb_vectors),
 		qseecom_enable_sfpb_vectors,
+	},
+	{
+		ARRAY_SIZE(qseecom_enable_dfab_sfpb_vectors),
+		qseecom_enable_dfab_sfpb_vectors,
 	},
 };
 
@@ -1921,6 +2209,7 @@ static const u8 mxt_config_data_8930_v2[] = {
 	0, 0, 0, 0,
 };
 
+#ifndef CONFIG_HUAWEI_KERNEL
 static ssize_t mxt224e_vkeys_show(struct kobject *kobj,
 			struct kobj_attribute *attr, char *buf)
 {
@@ -1965,6 +2254,7 @@ static void mxt_init_vkeys_8930(void)
 
 	return;
 }
+#endif /*CONFIG_HUAWEI_KERNEL*/
 
 static struct mxt_config_info mxt_config_array[] = {
 	{
@@ -2018,6 +2308,416 @@ static struct mxt_platform_data mxt_platform_data_8930 = {
 	.irq_gpio		= MXT_TS_GPIO_IRQ,
 };
 
+#ifdef CONFIG_HUAWEI_NFC_PN544
+static struct pn544_nfc_platform_data pn544_hw_data = 
+{
+	.pn544_ven_reset = pn544_ven_reset,
+	.pn544_interrupt_gpio_config = pn544_interrupt_gpio_config,
+	.pn544_fw_download_pull_down = pn544_fw_download_pull_down,
+	.pn544_fw_download_pull_high = pn544_fw_download_pull_high,
+	.pn544_clock_output_ctrl = pn544_clock_output_ctrl,
+	.pn544_clock_output_mode_ctrl = pn544_clock_output_mode_ctrl,
+};
+#endif
+
+#ifdef CONFIG_HUAWEI_KERNEL
+static struct touch_hw_platform_data touch_hw_data = 
+{
+	.touch_power = power_switch,
+	.set_touch_interrupt_gpio = set_touch_interrupt_gpio,
+	.set_touch_probe_flag = set_touch_probe_flag,
+	.read_touch_probe_flag = read_touch_probe_flag,
+	.touch_reset = touch_reset,
+	.get_touch_reset_gpio = get_touch_reset_gpio,
+	.get_touch_resolution = get_touch_resolution,
+	.read_button_flag = read_button_flag,
+	.get_touch_button_map = get_touch_button_map,
+};
+#ifdef CONFIG_HUAWEI_CYPRESS_TOUCHSCREEN
+/* do not arbitrarity set the feature register which includes the CA bit
+ * at startup, the feature bits tell what is available
+ * to enable a feature; write a 1 to the available bit.
+static const uint8_t cyttsp_op_regs[] = {0, 0, 0, 0x08, 0x01};
+ */
+/*Change TP report distence from 9 to 1 pixel*/
+static const uint8_t cyttsp_op_regs[] = {0, 0, 0, 0x00};
+static const uint8_t cyttsp_si_regs[] = {0, 0, 0, 0, 0, 0, 0x00, 0xFF, 0x0A};
+static const uint8_t cyttsp_bl_keys[] = {0, 1, 2, 3, 4, 5, 6, 7};
+static const char cyttsp_use_name[] = CY_I2C_NAME;
+
+static struct cyttsp_touch_settings cyttsp_sett_op_regs = {
+	.data = (uint8_t *)&cyttsp_op_regs[0],
+	.size = sizeof(cyttsp_op_regs),
+	.tag = 3,
+};
+
+static struct cyttsp_touch_settings cyttsp_sett_si_regs = {
+	.data = (uint8_t *)&cyttsp_si_regs[0],
+	.size = sizeof(cyttsp_si_regs),
+	.tag = 6,
+};
+
+static struct cyttsp_touch_settings cyttsp_sett_bl_keys = {
+	.data = (uint8_t *)&cyttsp_bl_keys[0],
+	.size = sizeof(cyttsp_bl_keys),
+	.tag = 0,
+};
+
+#ifdef CY_USE_AUTOLOAD_FW
+#include <linux/cyttsp3_img.h>
+static struct cyttsp_touch_firmware cyttsp3_firmware = {
+	.img = cyttsp3_img,
+	.size = sizeof(cyttsp3_img),
+	.ver = cyttsp3_ver,
+	.vsize = sizeof(cyttsp3_ver),
+};
+#else
+static struct cyttsp_touch_firmware cyttsp3_firmware = {
+	.img = NULL,
+	.size = 0,
+	.ver = NULL,
+	.vsize = 0,
+};
+#endif
+
+#if 0 /* Use this block for pre-Gingerbread integrations */
+static const uint16_t cyttsp3_abs[] = {
+	ABS_MT_POSITION_X, CY_ABS_MIN_X, CY_ABS_MAX_X, 0, 0,
+	ABS_MT_POSITION_Y, CY_ABS_MIN_Y, CY_ABS_MAX_Y, 0, 0,
+	ABS_MT_TOUCH_MAJOR, CY_ABS_MIN_P, CY_ABS_MAX_P, 0, 0,
+	CY_IGNORE_VALUE, CY_ABS_MIN_W, CY_ABS_MAX_W, 0, 0,
+	ABS_MT_TRACKING_ID, CY_ABS_MIN_T, CY_ABS_MAX_T, 0, 0,
+};
+#else /* Use this block for Gingerbread and later integrations */
+uint16_t cyttsp3_abs[] = {
+	ABS_MT_POSITION_X, CY_ABS_MIN_X, CY_ABS_MAX_X, 0, 0,
+	ABS_MT_POSITION_Y, CY_ABS_MIN_Y, CY_ABS_MAX_Y, 0, 0,
+	ABS_MT_PRESSURE, CY_ABS_MIN_P, CY_ABS_MAX_P, 0, 0,
+	ABS_MT_TOUCH_MAJOR, CY_ABS_MIN_W, CY_ABS_MAX_W, 0, 0,
+	ABS_MT_TRACKING_ID, CY_ABS_MIN_T, CY_ABS_MAX_T, 0, 0,
+};
+#endif
+
+struct cyttsp_touch_framework cyttsp3_framework = {
+	.abs = (uint16_t *)&cyttsp3_abs[0], 
+	.size = ARRAY_SIZE(cyttsp3_abs), 
+	.enable_vkeys = 1,
+};
+struct cyttsp_touch_platform_data cyttsp3_i2c_touch_platform_data = 
+{
+	.sett = 
+	{
+		NULL,
+		&cyttsp_sett_op_regs,
+		&cyttsp_sett_si_regs,
+		&cyttsp_sett_bl_keys,
+	},
+	.fw = &cyttsp3_firmware,
+	.frmwrk = &cyttsp3_framework,
+	.addr = {CY_I2C_TCH_ADR, CY_I2C_LDR_ADR},
+	.flags = 0x00,
+	.hw_reset = cyttsp3_hw_reset,
+	.hw_recov = cyttsp3_hw_recov,
+	.irq_stat = cyttsp3_irq_stat,
+	.set_touch_probe_flag = set_touch_probe_flag,/*add by huawei*/
+	.read_touch_probe_flag = read_touch_probe_flag,/*add by huawei*/
+	.get_touch_resolution = get_touch_resolution, /*add by huawei*/
+	.set_touch_interrupt_gpio = set_touch_interrupt_gpio,/*add by huawei*/
+	.get_touch_reset_gpio = get_touch_reset_gpio,/*add this function for ESD restart IC*/
+};	
+#endif
+
+#ifdef CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4
+/* Cypress cyttsp4 start */
+int cyttsp4_power_switch(int pm)
+{
+	int ret = 0;
+	gpio_request(67,"TouchScreen_1.8_Enable");
+	gpio_direction_output(67,1);
+	mdelay(1);
+	ret = gpio_get_value(67);
+	printk("%s: gpio67=%d\n", __func__,ret);
+	power_switch(pm);
+	return ret;
+}
+static int cyttsp4_xres(struct cyttsp4_core_platform_data *pdata,
+		struct device *dev)
+{
+	int rst_gpio = pdata->rst_gpio;
+	int rc = 0;
+
+	gpio_set_value(rst_gpio, 1);
+	msleep(20);
+	gpio_set_value(rst_gpio, 0);
+	msleep(40);
+	gpio_set_value(rst_gpio, 1);
+	msleep(20);
+	dev_info(dev,
+		"%s: RESET CYTTSP gpio=%d r=%d\n", __func__,
+		pdata->rst_gpio, rc);
+	return rc;
+}
+
+static int cyttsp4_init(struct cyttsp4_core_platform_data *pdata,
+		int on, struct device *dev)
+{
+	int rst_gpio = pdata->rst_gpio;
+	int irq_gpio = pdata->irq_gpio;
+	int rc = 0;
+
+	if (gpio_tlmm_config(GPIO_CFG(irq_gpio, 0,GPIO_CFG_INPUT, GPIO_CFG_PULL_UP, GPIO_CFG_2MA),GPIO_CFG_ENABLE))
+	{
+		pr_err("%s:touch int gpio config failed\n", __func__);
+		rc = -ENODEV;
+	}
+
+	if (gpio_tlmm_config(GPIO_CFG(rst_gpio, 0,GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_2MA),GPIO_CFG_ENABLE))
+	{
+		pr_err("%s:touch rst gpio config failed\n", __func__);
+		rc = -ENODEV;
+	}
+	if (on) {
+		rc = gpio_request(rst_gpio, NULL);
+		if (rc < 0) {
+			gpio_free(rst_gpio);
+			rc = gpio_request(rst_gpio, NULL);
+		}
+		if (rc < 0) {
+			dev_err(dev,
+				"%s: Fail request gpio=%d\n", __func__,
+				rst_gpio);
+		} else {
+			rc = gpio_direction_output(rst_gpio, 1);
+			if (rc < 0) {
+				pr_err("%s: Fail set output gpio=%d\n",
+					__func__, rst_gpio);
+				gpio_free(rst_gpio);
+			} else {
+				rc = gpio_request(irq_gpio, NULL);
+				if (rc < 0) {
+					gpio_free(irq_gpio);
+					rc = gpio_request(irq_gpio,
+						NULL);
+				}
+				if (rc < 0) {
+					dev_err(dev,
+						"%s: Fail request gpio=%d\n",
+						__func__, irq_gpio);
+					gpio_free(rst_gpio);
+				} else {
+					gpio_direction_input(irq_gpio);
+				}
+			}
+		}
+	} else {
+		gpio_free(rst_gpio);
+		gpio_free(irq_gpio);
+	}
+
+	dev_info(dev,
+		"%s: INIT CYTTSP RST gpio=%d and IRQ gpio=%d r=%d\n",
+		__func__, rst_gpio, irq_gpio, rc);
+	return rc;
+}
+
+static int cyttsp4_wakeup(struct cyttsp4_core_platform_data *pdata,
+		struct device *dev, atomic_t *ignore_irq)
+{
+	int irq_gpio = pdata->irq_gpio;
+	int rc = 0;
+
+	if (ignore_irq)
+		atomic_set(ignore_irq, 1);
+	rc = gpio_direction_output(irq_gpio, 0);
+	if (rc < 0) {
+		if (ignore_irq)
+			atomic_set(ignore_irq, 0);
+		dev_err(dev,
+			"%s: Fail set output gpio=%d\n",
+			__func__, irq_gpio);
+	} else {
+		udelay(2000);
+		rc = gpio_direction_input(irq_gpio);
+		if (ignore_irq)
+			atomic_set(ignore_irq, 0);
+		if (rc < 0) {
+			dev_err(dev,
+				"%s: Fail set input gpio=%d\n",
+				__func__, irq_gpio);
+		}
+	}
+
+	dev_info(dev,
+		"%s: WAKEUP CYTTSP gpio=%d r=%d\n", __func__,
+		irq_gpio, rc);
+	return rc;
+}
+
+static int cyttsp4_sleep(struct cyttsp4_core_platform_data *pdata,
+		struct device *dev, atomic_t *ignore_irq)
+{
+	return 0;
+}
+
+static int cyttsp4_power(struct cyttsp4_core_platform_data *pdata,
+		int on, struct device *dev, atomic_t *ignore_irq)
+{
+	if (on)
+		return cyttsp4_wakeup(pdata, dev, ignore_irq);
+
+	return cyttsp4_sleep(pdata, dev, ignore_irq);
+}
+
+static int cyttsp4_irq_stat(struct cyttsp4_core_platform_data *pdata,
+		struct device *dev)
+{
+	return gpio_get_value(pdata->irq_gpio);
+}
+
+/* Button to keycode conversion */
+static u16 cyttsp4_btn_keys[] = {
+	/* use this table to map buttons to keycodes (see input.h) */
+	KEY_BACK,		/* 102 */
+	KEY_HOME,		/* 139 */
+	KEY_MENU,		/* 158 */
+	KEY_SEARCH,		/* 217 */
+	KEY_VOLUMEDOWN,		/* 114 */
+	KEY_VOLUMEUP,		/* 115 */
+	KEY_CAMERA,		/* 212 */
+	KEY_POWER		/* 116 */
+};
+
+static struct touch_settings cyttsp4_sett_btn_keys = {
+	.data = (uint8_t *)&cyttsp4_btn_keys[0],
+	.size = ARRAY_SIZE(cyttsp4_btn_keys),
+	.tag = 0,
+};
+
+static struct cyttsp4_core_platform_data _cyttsp4_core_platform_data = {
+	.irq_gpio = MSM_8930_TOUCH_INT_PIN,
+	.rst_gpio = MSM_8930_TOUCH_RESET_PIN,
+	.xres = cyttsp4_xres,
+	.init = cyttsp4_init,
+	.touch_power = cyttsp4_power_switch,
+	.power = cyttsp4_power,
+	.irq_stat = cyttsp4_irq_stat,
+	.set_touch_probe_flag = set_touch_probe_flag,
+	.read_touch_probe_flag = read_touch_probe_flag,
+	.sett = {
+		NULL,	/* Reserved */
+		NULL,	/* Command Registers */
+		NULL,	/* Touch Report */
+		NULL,	/* Cypress Data Record */
+		NULL,	/* Test Record */
+		NULL,	/* Panel Configuration Record */
+		NULL, /* &cyttsp4_sett_param_regs, */
+		NULL, /* &cyttsp4_sett_param_size, */
+		NULL,	/* Reserved */
+		NULL,	/* Reserved */
+		NULL,	/* Operational Configuration Record */
+		NULL, /* &cyttsp4_sett_ddata, *//* Design Data Record */
+		NULL, /* &cyttsp4_sett_mdata, *//* Manufacturing Data Record */
+		NULL,	/* Config and Test Registers */
+		&cyttsp4_sett_btn_keys,	/* button-to-keycode table */
+	},
+	.loader_pdata = &_cyttsp4_loader_platform_data,
+};
+
+
+static struct cyttsp4_core_info cyttsp4_core_info __initdata = {
+	.name = CYTTSP4_CORE_NAME,
+	.id = "main_ttsp_core",
+	.adap_id = CYTTSP4_I2C_NAME,
+	.platform_data = &_cyttsp4_core_platform_data,
+};
+
+static const uint16_t cyttsp4_abs[] = {
+	ABS_MT_POSITION_X, CY4_ABS_MIN_X, CY4_ABS_MAX_X, 0, 0,
+	ABS_MT_POSITION_Y, CY4_ABS_MIN_Y, CY4_ABS_MAX_Y, 0, 0,
+	ABS_MT_PRESSURE, CY4_ABS_MIN_P, CY4_ABS_MAX_P, 0, 0,
+	CY_IGNORE_VALUE, CY4_ABS_MIN_W, CY4_ABS_MAX_W, 0, 0,
+	ABS_MT_TRACKING_ID, CY4_ABS_MIN_T, CY4_ABS_MAX_T, 0, 0,
+	ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0,
+	ABS_MT_TOUCH_MINOR, 0, 255, 0, 0,
+	ABS_MT_ORIENTATION, -128, 127, 0, 0,
+};
+struct touch_framework cyttsp4_framework = {
+	.abs = (uint16_t *)&cyttsp4_abs[0],
+	.size = ARRAY_SIZE(cyttsp4_abs),
+	.enable_vkeys = 0,
+};
+
+static struct cyttsp4_mt_platform_data _cyttsp4_mt_platform_data = {
+	.frmwrk = &cyttsp4_framework,
+	.flags = 0x40,
+	.inp_dev_name = CYTTSP4_MT_NAME,
+};
+
+struct cyttsp4_device_info cyttsp4_mt_info __initdata = {
+	.name = CYTTSP4_MT_NAME,
+	.core_id = "main_ttsp_core",
+	.platform_data = &_cyttsp4_mt_platform_data,
+};
+
+static struct cyttsp4_btn_platform_data _cyttsp4_btn_platform_data = {
+	.inp_dev_name = CYTTSP4_BTN_NAME,
+};
+
+struct cyttsp4_device_info cyttsp4_btn_info __initdata = {
+	.name = CYTTSP4_BTN_NAME,
+	.core_id = "main_ttsp_core",
+	.platform_data = &_cyttsp4_btn_platform_data,
+};
+
+static void  huawei_cyttsp4_init(void)
+{
+	/* Register core and devices */
+	cyttsp4_register_core_device(&cyttsp4_core_info);
+	cyttsp4_register_device(&cyttsp4_mt_info);
+	cyttsp4_register_device(&cyttsp4_btn_info);
+}
+
+
+/* Cypress cyttsp4 end */
+#endif
+
+static struct i2c_board_info touch_device_info_8930[] __initdata = {
+#ifdef CONFIG_HUAWEI_FEATURE_RMI_TOUCH
+	{
+		I2C_BOARD_INFO("Synaptics_rmi", 0x70),
+		.platform_data = &touch_hw_data,
+		.irq = MSM_GPIO_TO_INT(MSM_8930_TOUCH_INT_PIN),
+		.flags = true,
+	},
+#endif
+
+#ifdef CONFIG_HUAWEI_CYPRESS_TOUCHSCREEN
+	{
+		I2C_BOARD_INFO(CY_I2C_NAME, CY_I2C_TCH_ADR),
+		.irq = MSM_GPIO_TO_INT(MSM_8930_TOUCH_INT_PIN),
+		.platform_data = &cyttsp3_i2c_touch_platform_data,
+        .flags = true,
+	},
+#endif
+
+#ifdef CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4
+	{
+		I2C_BOARD_INFO(CYTTSP4_I2C_NAME, CYTTSP4_I2C_TCH_ADR),
+		.irq = MSM_GPIO_TO_INT(MSM_8930_TOUCH_INT_PIN),
+		.platform_data = CYTTSP4_I2C_NAME,
+		.flags = true,
+	},
+#endif
+
+
+    {
+		I2C_BOARD_INFO("Synaptics_rmi", 0x20),
+		.platform_data = &touch_hw_data,
+		.irq = MSM_GPIO_TO_INT(MSM_8930_TOUCH_INT_PIN),
+        .flags = true,
+	},
+};
+#endif
 static struct i2c_board_info mxt_device_info_8930[] __initdata = {
 	{
 		I2C_BOARD_INFO("atmel_mxt_ts", 0x4a),
@@ -2025,6 +2725,184 @@ static struct i2c_board_info mxt_device_info_8930[] __initdata = {
 		.irq = MSM_GPIO_TO_INT(MXT_TS_GPIO_IRQ),
 	},
 };
+/* -------------------- huawei sensors -------------------- */
+static int gs_init_flag = 0;   /*gsensor is not initialized*/
+/*modify sensors platform_data */
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_ACCELEROMETER_ADI_ADXL346
+static struct gs_platform_data gs_adi346_platform_data = {
+	.adapt_fn = gsensor_support_dummyaddr_adi346,
+	.slave_addr = (0xA6 >> 1),  /*i2c slave address*/
+	.dev_id = 0x00,    /*WHO AM I*/
+	.init_flag = &gs_init_flag,
+	.get_compass_gs_position=get_compass_gs_position,
+	.gs_power = power_switch,
+};
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_ACCELEROMETER_KXTIK1004
+static struct gs_platform_data gs_kxtik_platform_data = {
+	.adapt_fn = gsensor_support_dummyaddr_kxtik,
+	.slave_addr = (0x1E >> 1),  /*i2c slave address*/
+	.dev_id = 0x05,    /*WHO AM I*/
+	.init_flag = &gs_init_flag,
+	.get_compass_gs_position=get_compass_gs_position,
+	.gs_power = power_switch,
+};
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_GYROSCOPE_L3G4200DH
+static struct gyro_platform_data gy_l3g4200d_platform_data = {
+	.gyro_power = power_switch,
+	.axis_map_x = 0,     /*x map read data[axis_map_x] from i2c*/
+	.axis_map_y = 1,
+	.axis_map_z = 2,	
+	.negate_x = 0,       /*negative x,y or z*/
+	.negate_y =0,
+	.negate_z = 0,
+	.slave_addr = 0x68,  	/*i2c slave address*/
+	.dev_id = 0x0F,             /*WHO AM I*/
+};
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_ACCELEROMETER_MMA8452
+static struct gs_platform_data gs_mma8452_platform_data = {
+	.adapt_fn = NULL,
+	.slave_addr = (0x38 >> 1),  /*i2c slave address*/
+	.dev_id = 0x2A,    /*WHO AM I*/
+	.init_flag = &gs_init_flag,
+	.get_compass_gs_position=get_compass_gs_position,
+	.gs_power = power_switch,
+};
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_ACCELEROMETER_ST_LIS3XH
+static struct gs_platform_data gs_st_lis3xh_platform_data = {
+	.adapt_fn = NULL,
+	.slave_addr = (0x30 >> 1),  /*i2c slave address*/
+	.dev_id = 0x00,    /*WHO AM I*/
+	.init_flag = &gs_init_flag,
+	.get_compass_gs_position=get_compass_gs_position,
+	.gs_power = power_switch,
+};
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_PROXIMITY_EVERLIGHT_APS_9900
+static struct aps9900_hw_platform_data aps9900_hw_data = {
+	.aps9900_gpio_config_interrupt = aps9900_gpio_config_interrupt,
+	.aps9900_power = power_switch,
+};
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_PROXIMITY_EVERLIGHT_APS_12D
+static struct aps12d_hw_platform_data aps12d_hw_data = {
+	.aps12d_power = power_switch,
+};
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_AK8975
+static struct compass_platform_data akm8975_hw_data = {
+	.compass_power = power_switch,
+};
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_AK8963
+static struct compass_platform_data akm8963_hw_data = {
+	.compass_power = power_switch,
+};
+#endif
+
+static struct i2c_board_info flash_led_device_info_8930[] __initdata = {
+#ifdef CONFIG_HUAWEI_FEATURE_LM3642
+	{
+	I2C_BOARD_INFO("lm3642" , 0x63),
+	},
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_TPS61310
+	{
+	I2C_BOARD_INFO("tps61310", 0x33),		
+	},
+#endif
+};
+static struct i2c_board_info sensor_device_info_8930[] __initdata = {
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_ACCELEROMETER_ADI_ADXL346
+	{
+		I2C_BOARD_INFO("gs_adi346", 0xA8>>1),  /* actual address 0xA6, fake address 0xA8*/
+		.platform_data = &gs_adi346_platform_data,
+		.irq = MSM_GPIO_TO_INT(46)    //MEMS_INT1
+	},
+#endif 
+
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_ACCELEROMETER_KXTIK1004
+	{ 
+		I2C_BOARD_INFO("gs_kxtik", 0x1E >> 1),  /* actual address 0x0F*/
+		.platform_data = &gs_kxtik_platform_data,
+		.irq = MSM_GPIO_TO_INT(46)     //MEMS_INT1
+	},
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_ACCELEROMETER_MMA8452
+	{
+		I2C_BOARD_INFO("gs_mma8452", 0x38 >> 1),
+		.platform_data = &gs_mma8452_platform_data,
+		.irq = MSM_GPIO_TO_INT(46)    //MEMS_INT1
+	},
+#endif	
+
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_ACCELEROMETER_ST_LIS3XH
+	{
+		I2C_BOARD_INFO("gs_st_lis3xh", 0x30 >> 1),
+		.platform_data = &gs_st_lis3xh_platform_data,
+		.irq = MSM_GPIO_TO_INT(46)    //MEMS_INT1
+	},
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_AK8975
+	{
+		I2C_BOARD_INFO("akm8975", 0x0C),//7 bit addr, no write bit
+		.platform_data = &akm8975_hw_data,
+		.irq = MSM_GPIO_TO_INT(MSM_8930_COMPASS_INT_PIN)
+	},
+#endif 
+
+#ifdef CONFIG_HUAWEI_FEATURE_SENSORS_AK8963
+	{
+		I2C_BOARD_INFO("akm8963", 0x0E),//7 bit addr, no write bit
+		.platform_data = &akm8963_hw_data,
+		.irq = MSM_GPIO_TO_INT(MSM_8930_COMPASS_INT_PIN)
+	},
+#endif 
+
+#ifdef CONFIG_HUAWEI_FEATURE_GYROSCOPE_L3G4200DH
+	{   
+		I2C_BOARD_INFO("l3g4200d", 0x68),  
+		.platform_data = &gy_l3g4200d_platform_data,
+	},
+	#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_PROXIMITY_EVERLIGHT_APS_12D
+	{   
+		I2C_BOARD_INFO("aps-12d", 0x88 >> 1),  
+		.platform_data = &aps12d_hw_data,
+	},
+#endif
+
+#ifdef CONFIG_HUAWEI_FEATURE_PROXIMITY_EVERLIGHT_APS_9900
+	{   
+		I2C_BOARD_INFO("aps-9900", 0x39),
+		.irq = MSM_GPIO_TO_INT(MSM_8930_APS_INT_PIN),
+		.platform_data = &aps9900_hw_data,
+	},
+#endif
+};
+#ifdef CONFIG_QWERTY_KEYPAD_ADP5587
+static struct i2c_board_info qwerty_keypad_device_info[] __initdata = {
+	{
+		I2C_BOARD_INFO("adp5587", 0x34),
+		.irq = MSM_GPIO_TO_INT(19)
+	},
+};
+#endif
 
 #define MHL_POWER_GPIO_PM8038	PM8038_GPIO_PM_TO_SYS(MHL_GPIO_PWR_EN)
 #define MHL_POWER_GPIO_PM8917	PM8917_GPIO_PM_TO_SYS(25)
@@ -2048,11 +2926,31 @@ static struct i2c_board_info sii_device_info[] __initdata = {
 	},
 };
 
+#ifdef CONFIG_HUAWEI_NFC_PN544
+static struct i2c_board_info nfc_device_info_8930[] __initdata = {
+	{
+		I2C_BOARD_INFO(PN544_DRIVER_NAME, PN544_I2C_ADDR),
+		.irq = MSM_GPIO_TO_INT(GPIO_NFC_INT),
+		.platform_data = &pn544_hw_data,
+	},
+};
+#endif
 
 #ifdef MSM8930_PHASE_2
 
 #define GPIO_VOLUME_UP_PM8038		PM8038_GPIO_PM_TO_SYS(3)
+#ifdef CONFIG_HUAWEI_KERNEL
+#define GPIO_PTT_KEY_PM8038		   PM8038_GPIO_PM_TO_SYS(6)
+/* use gpio7 work as volume- */
+#define GPIO_VOLUME_DOWN_PM8038		PM8038_GPIO_PM_TO_SYS(7)
+#else
 #define GPIO_VOLUME_DOWN_PM8038		PM8038_GPIO_PM_TO_SYS(8)
+#endif
+/* use gpio50 work as slide. use mpp10 work as snapshot */
+#ifdef CONFIG_HUAWEI_KERNEL
+#define GPIO_SLIDE_DETECT		50
+#endif 
+
 #define GPIO_CAMERA_SNAPSHOT_PM8038	PM8038_GPIO_PM_TO_SYS(10)
 #define GPIO_CAMERA_FOCUS_PM8038	PM8038_GPIO_PM_TO_SYS(11)
 
@@ -2067,7 +2965,8 @@ static struct gpio_keys_button keys_8930_pm8038[] = {
 		.type = EV_KEY,
 		.desc = "volume_up",
 		.gpio = GPIO_VOLUME_UP_PM8038,
-		.wakeup = 1,
+         //delete	6 lines	
+		.wakeup = 1,    
 		.active_low = 1,
 		.debounce_interval = 15,
 	},
@@ -2076,7 +2975,8 @@ static struct gpio_keys_button keys_8930_pm8038[] = {
 		.type = EV_KEY,
 		.desc = "volume_down",
 		.gpio = GPIO_VOLUME_DOWN_PM8038,
-		.wakeup = 1,
+         //delete	6 lines	
+		.wakeup = 1,   
 		.active_low = 1,
 		.debounce_interval = 15,
 	},
@@ -2090,14 +2990,25 @@ static struct gpio_keys_button keys_8930_pm8038[] = {
 		.debounce_interval = 15,
 	},
 	{
-		.code = KEY_CAMERA_SNAPSHOT,
+		.code = KEY_CAMERA,
 		.type = EV_KEY,
 		.desc = "camera_snapshot",
 		.gpio = GPIO_CAMERA_SNAPSHOT_PM8038,
-		.wakeup = 1,
+		.wakeup = 0,
 		.active_low = 1,
 		.debounce_interval = 15,
 	},
+#ifdef CONFIG_HUAWEI_KERNEL
+	{
+		.code = SW_LID,
+		.type = EV_SW,
+		.desc = "SLIDE_DETECT",
+		.gpio = GPIO_SLIDE_DETECT,
+		.wakeup = 1,
+		.active_low = 0,
+		.debounce_interval = 15,
+	},
+#endif
 };
 
 static struct gpio_keys_button keys_8930_pm8917[] = {
@@ -2139,6 +3050,31 @@ static struct gpio_keys_button keys_8930_pm8917[] = {
 	},
 };
 
+static struct gpio_keys_button keys_8930_pm8038_custom[] = {
+	{
+		.code = KEY_CHAT,
+		.type = EV_KEY,
+		.desc = KEYNAME_PTT,
+		.gpio = GPIO_PTT_KEY_PM8038,
+		.wakeup = 1,
+		.active_low = 1,
+		.debounce_interval = 15,
+	},
+};	
+
+static struct gpio_keys_platform_data gpio_keys_8930_custom_pdata = {
+	.buttons = keys_8930_pm8038_custom,
+	.nbuttons = ARRAY_SIZE(keys_8930_pm8038_custom),
+};
+
+static struct platform_device gpio_keys_8930_custom = {
+	.name		= "gpio-keys",
+	.id		= 0,
+	.dev		= {
+		.platform_data  = &gpio_keys_8930_custom_pdata,
+	},
+};
+
 /* Add GPIO keys for 8930 */
 static struct gpio_keys_platform_data gpio_keys_8930_pdata = {
 	.buttons = keys_8930_pm8038,
@@ -2158,12 +3094,11 @@ static struct msm_i2c_platform_data msm8960_i2c_qup_gsbi4_pdata = {
 	.clk_freq = 100000,
 	.src_clk_rate = 24000000,
 };
-
+/*set i2c frequency to 400K to accelerate transmit speed*/
 static struct msm_i2c_platform_data msm8960_i2c_qup_gsbi3_pdata = {
-	.clk_freq = 100000,
+	.clk_freq = 400000,
 	.src_clk_rate = 24000000,
 };
-
 static struct msm_i2c_platform_data msm8960_i2c_qup_gsbi9_pdata = {
 	.clk_freq = 100000,
 	.src_clk_rate = 24000000,
@@ -2301,6 +3236,13 @@ static struct platform_device msm8930_device_rpm_regulator __devinitdata = {
 	},
 };
 
+#ifdef CONFIG_HUAWEI_HW_DEV_DCT
+static struct platform_device huawei_device_detect = {
+	.name = "hw-dev-detect",
+	.id   =-1,
+};
+#endif
+
 static struct platform_device *early_common_devices[] __initdata = {
 	&msm8960_device_dmov,
 	&msm_device_smd,
@@ -2327,6 +3269,12 @@ static struct platform_device *pmic_pm8917_devices[] __initdata = {
 	&msm8960_device_ssbi_pmic,
 };
 
+#ifdef CONFIG_HUAWEI_KERNEL
+static struct platform_device *wcnss_devices[] __initdata = {
+        &msm_device_wcnss_wlan,
+};
+#endif
+
 static struct platform_device *common_devices[] __initdata = {
 	&msm_8960_q6_lpass,
 	&msm_8960_riva,
@@ -2339,7 +3287,9 @@ static struct platform_device *common_devices[] __initdata = {
 	&msm8960_device_qup_i2c_gsbi10,
 	&msm8960_device_qup_i2c_gsbi12,
 	&msm_slim_ctrl,
+#ifndef CONFIG_HUAWEI_KERNEL	
 	&msm_device_wcnss_wlan,
+#endif	
 #if defined(CONFIG_QSEECOM)
 		&qseecom_device,
 #endif
@@ -2405,6 +3355,10 @@ static struct platform_device *common_devices[] __initdata = {
 	&msm8930_iommu_domain_device,
 	&msm_tsens_device,
 	&msm8930_cache_dump_device,
+#ifdef CONFIG_HUAWEI_HW_DEV_DCT
+	&huawei_device_detect,
+#endif
+	&msm8930_pc_cntr,
 };
 
 static struct platform_device *cdp_devices[] __initdata = {
@@ -2416,6 +3370,8 @@ static struct platform_device *cdp_devices[] __initdata = {
 	&msm_pcm_routing,
 	&msm_cpudai0,
 	&msm_cpudai1,
+	/* Merge MI2S patch */
+	&msm_cpudai_mi2s,
 	&msm_cpudai_hdmi_rx,
 	&msm_cpudai_bt_rx,
 	&msm_cpudai_bt_tx,
@@ -2679,6 +3635,30 @@ static struct i2c_registry msm8960_i2c_devices[] __initdata = {
 		ARRAY_SIZE(mpu3050_i2c_boardinfo),
 	},
 #endif
+#ifdef CONFIG_HUAWEI_KERNEL
+	{
+		I2C_SURF | I2C_FFA | I2C_FLUID,
+        MSM_8930_GSBI9_QUP_I2C_BUS_ID,
+		nfc_bcm2079x,
+		ARRAY_SIZE(nfc_bcm2079x),
+	},
+#endif
+#ifdef CONFIG_HUAWEI_NFC_PN544
+	{
+		I2C_SURF | I2C_FFA | I2C_FLUID,
+		MSM_8930_GSBI9_QUP_I2C_BUS_ID,
+		nfc_device_info_8930,
+		ARRAY_SIZE(nfc_device_info_8930),
+	},
+#endif
+#ifdef CONFIG_QWERTY_KEYPAD_ADP5587
+	{
+		I2C_SURF | I2C_FFA | I2C_FLUID,
+		MSM_8930_GSBI9_QUP_I2C_BUS_ID,
+		qwerty_keypad_device_info,
+		ARRAY_SIZE(qwerty_keypad_device_info),
+	},
+#endif
 	{
 		I2C_SURF | I2C_FFA | I2C_FLUID,
 		MSM_8930_GSBI9_QUP_I2C_BUS_ID,
@@ -2691,11 +3671,25 @@ static struct i2c_registry msm8960_i2c_devices[] __initdata = {
 		mxt_device_info_8930,
 		ARRAY_SIZE(mxt_device_info_8930),
 	},
+#ifdef CONFIG_HUAWEI_KERNEL
+	{
+		I2C_SURF | I2C_FFA | I2C_FLUID,
+		MSM_8930_GSBI3_QUP_I2C_BUS_ID,
+		touch_device_info_8930,
+		ARRAY_SIZE(touch_device_info_8930),
+	},
+#endif
 	{
 		I2C_SURF | I2C_FFA | I2C_LIQUID | I2C_FLUID,
 		MSM_8930_GSBI9_QUP_I2C_BUS_ID,
 		sii_device_info,
 		ARRAY_SIZE(sii_device_info),
+	},
+	{
+		I2C_SURF | I2C_FFA | I2C_FLUID,
+		MSM_8930_GSBI12_QUP_I2C_BUS_ID,
+		sensor_device_info_8930,
+		ARRAY_SIZE(sensor_device_info_8930),
 	},
 #ifdef CONFIG_STM_LIS3DH
 	{
@@ -2705,6 +3699,12 @@ static struct i2c_registry msm8960_i2c_devices[] __initdata = {
 		ARRAY_SIZE(lis3dh_i2c_boardinfo),
 	},
 #endif
+	{
+		I2C_SURF | I2C_FFA | I2C_FLUID,
+		MSM_8930_GSBI12_QUP_I2C_BUS_ID,
+		flash_led_device_info_8930,
+		ARRAY_SIZE(flash_led_device_info_8930),
+	},
 };
 #endif /* CONFIG_I2C */
 
@@ -2793,8 +3793,46 @@ static void __init msm8930_pm8917_pdata_fixup(void)
 	pdata->uses_pm8917 = true;
 }
 
+#ifdef CONFIG_HW_POWER_TREE
+void __init HuaWei_Regulator_Config(void)
+{
+	static int i;
+  config_power_tree_pdata = get_power_config_table();
+  //rpm
+  msm8930_rpm_regulator_pdata.init_data = config_power_tree_pdata->rpm_power_pdata;
+  msm8930_rpm_regulator_pdata.num_regulators = config_power_tree_pdata->rpm_reg_num;
+    
+  //saw
+  msm_saw_regulator_pdata__ = config_power_tree_pdata->saw_power_pdata;
+  for(i=0;i<config_power_tree_pdata->saw_reg_num;i++)
+  {
+  	if(0==strcmp(msm_saw_regulator_pdata__[i].constraints.name,"8038_s5"))
+  		msm_device_saw_core0.dev.platform_data = &msm_saw_regulator_pdata__[i];
+  	else if(0==strcmp(msm_saw_regulator_pdata__[i].constraints.name,"8038_s6"))
+  		msm_device_saw_core1.dev.platform_data = &msm_saw_regulator_pdata__[i];
+  	else
+  		printk("Some msm saw regulator config error!\n");
+  }
+  
+  //gpio
+  msm_gpio_regulator_pdata__ = config_power_tree_pdata->gpio_power_pdata;
+  for(i=0;i<config_power_tree_pdata->gpio_reg_num;i++)
+  {
+  	if(0==strcmp(msm_gpio_regulator_pdata__[i].regulator_name,"ext_5v"))
+  		msm8930_device_ext_5v_vreg.dev.platform_data = &msm_gpio_regulator_pdata__[i];
+  	else if(0==strcmp(msm_gpio_regulator_pdata__[i].regulator_name,"ext_otg_sw")) //add new gpio power in 104050,20120303
+  		msm8930_device_ext_otg_sw_vreg.dev.platform_data = &msm_gpio_regulator_pdata__[i];
+  	else
+  		printk("Some msm gpio regulator config error!\n");
+  }
+}
+#endif
+
 static void __init msm8930_cdp_init(void)
 {
+#ifdef CONFIG_HUAWEI_KERNEL
+	int i = 0, ret= 0;
+#endif
 	if (socinfo_get_pmic_model() == PMIC_MODEL_PM8917)
 		msm8930_pm8917_pdata_fixup();
 	if (meminfo_init(SYS_MEMORY, SZ_256M) < 0)
@@ -2810,6 +3848,15 @@ static void __init msm8930_cdp_init(void)
 		BUG_ON(msm_rpm_init(&msm8930_rpm_data_pm8917));
 		BUG_ON(msm_rpmrs_levels_init(&msm_rpmrs_data_pm8917));
 	}
+
+#ifdef CONFIG_HW_POWER_TREE
+	HuaWei_Regulator_Config();
+#endif
+
+    /* transplant the usb solution from 8x25ICS to 8930JB */
+#ifdef CONFIG_HUAWEI_KERNEL
+    import_kernel_cmdline();
+#endif
 
 	regulator_suppress_info_printing();
 	if (msm_xo_init())
@@ -2894,6 +3941,29 @@ static void __init msm8930_cdp_init(void)
 		platform_add_devices(pmic_pm8917_devices,
 					ARRAY_SIZE(pmic_pm8917_devices));
 	platform_add_devices(common_devices, ARRAY_SIZE(common_devices));
+
+#ifdef CONFIG_HUAWEI_KERNEL
+	/*If the product supports custom keys, then add it*/
+	if (0 < get_key_custom_num(KEYNAME_SUPPORT)){
+		/*this will make sure not to conflict gpio number on different product/board*/
+		for (i = 0; i < gpio_keys_8930_custom_pdata.nbuttons; ++i){
+			ret = get_key_custom_num(keys_8930_pm8038_custom[i].desc);
+			if (ret == -1)
+				continue;
+			pr_info("Key %s gpio is configured as:%d\n", keys_8930_pm8038_custom[i].desc, ret);
+			keys_8930_pm8038_custom[i].gpio = PM8038_GPIO_PM_TO_SYS(ret);
+		}
+		platform_device_register(&gpio_keys_8930_custom);
+	}
+#endif
+
+#ifdef CONFIG_HUAWEI_KERNEL
+        if (WIFI_QUALCOMM_WCN3660 == get_hw_wifi_device_type())
+        {
+            platform_add_devices(wcnss_devices, ARRAY_SIZE(wcnss_devices));
+        }
+#endif       
+
 	msm8930_add_vidc_device();
 	/*
 	 * TODO: When physical 8930/PM8038 hardware becomes
@@ -2914,14 +3984,30 @@ static void __init msm8930_cdp_init(void)
 		platform_device_register(&msm_8960_q6_mss_fw);
 		platform_device_register(&msm_8960_q6_mss_sw);
 	}
+/* bluetooth power init */
+#ifdef CONFIG_HUAWEI_KERNEL
+	bluetooth_power_init();
+#endif
 	platform_add_devices(cdp_devices, ARRAY_SIZE(cdp_devices));
 #ifdef CONFIG_MSM_CAMERA
 	msm8930_init_cam();
 #endif
 	msm8930_init_mmc();
+	msm8930_init_audio_acdb();  
+#ifdef CONFIG_HUAWEI_KERNEL
+    virtualkeys_init();
+#else
 	mxt_init_vkeys_8930();
+#endif
 	register_i2c_devices();
+#ifdef CONFIG_HUAWEI_KERNEL
+	config_debugfs_init();
+#endif
 	msm8930_init_fb();
+#ifdef CONFIG_HUAWEI_GPIO_UNITE 
+	hw_gpio_init();
+#endif
+
 	slim_register_board_info(msm_slim_devices,
 		ARRAY_SIZE(msm_slim_devices));
 	change_memory_power = &msm8930_change_memory_power;
@@ -2930,7 +4016,59 @@ static void __init msm8930_cdp_init(void)
 
 	if (PLATFORM_IS_CHARM25())
 		platform_add_devices(mdm_devices, ARRAY_SIZE(mdm_devices));
+#ifdef CONFIG_HUAWEI_KERNEL
+    hw_extern_sdcard_add_device();
+#endif
+#ifdef CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4
+    huawei_cyttsp4_init();
+#endif
 }
+#ifdef CONFIG_HUAWEI_KERNEL
+static struct resource hw_extern_sdcard_resources[] = {
+    {
+        .flags  = IORESOURCE_MEM,
+    },
+};
+
+/* 
+ * Define the 'hw_extern_sdcard' device node for MMI sdcard test to  
+ * judge if the sd card inserted.
+ */
+static struct platform_device hw_extern_sdcard_device = {
+    .name           = "hw_extern_sdcard",
+    .id             = -1,
+    .num_resources  = ARRAY_SIZE(hw_extern_sdcard_resources),
+    .resource       = hw_extern_sdcard_resources,
+};
+
+static struct resource hw_extern_sdcardMounted_resources[] = {
+    {
+        .flags  = IORESOURCE_MEM,
+    },
+};
+
+/* 
+ * Define the 'hw_extern_sdcardMounted' device node for MMI sdcard test to  
+ * judge if the sd card mounted.
+ */
+static struct platform_device hw_extern_sdcardMounted_device = {
+    .name           = "hw_extern_sdcardMounted",
+    .id             = -1,
+    .num_resources  = ARRAY_SIZE(hw_extern_sdcardMounted_resources),
+    .resource       = hw_extern_sdcardMounted_resources,
+};
+
+/* 
+ * Add the device nodes 'hw_extern_sdcard' and 'hw_extern_sdcardMounted' in /dev. 
+ * It is used by MMI sdcard test.
+ */
+int __init hw_extern_sdcard_add_device(void)
+{
+    platform_device_register(&hw_extern_sdcard_device);
+    platform_device_register(&hw_extern_sdcardMounted_device);
+    return 0;
+}
+#endif
 
 MACHINE_START(MSM8930_CDP, "QCT MSM8930 CDP")
 	.map_io = msm8930_map_io,

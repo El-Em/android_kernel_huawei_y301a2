@@ -1,5 +1,5 @@
 
-/* Copyright (c) 2008-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,6 +26,7 @@
 #include <linux/clk.h>
 #include <linux/iopoll.h>
 #include <linux/platform_device.h>
+#include <linux/iopoll.h>
 
 #include <asm/system.h>
 #include <asm/mach-types.h>
@@ -40,7 +41,17 @@
 #include "mdp.h"
 #include "mdp4.h"
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+#include <linux/time.h>
+#include <linux/proc_fs.h>   
+#include <linux/workqueue.h>   
+#include <linux/sched.h>    
+#endif
 static struct completion dsi_dma_comp;
+#ifdef CONFIG_HW_ESD_DETECT
+/*add qcom patch to solve esd issue*/
+static struct completion dsi_bta_comp;
+#endif
 static struct completion dsi_mdp_comp;
 static struct dsi_buf dsi_tx_buf;
 static struct dsi_buf dsi_rx_buf;
@@ -49,7 +60,12 @@ static spinlock_t dsi_mdp_lock;
 spinlock_t dsi_clk_lock;
 static int dsi_ctrl_lock;
 static int dsi_mdp_busy;
+/*fix qcom command list bug*/
+#ifndef CONFIG_HUAWEI_KERNEL
 static struct mutex cmd_mutex;
+#else
+struct mutex cmd_mutex;
+#endif
 static struct mutex clk_mutex;
 
 static struct list_head pre_kickoff_list;
@@ -63,6 +79,18 @@ enum {
 };
 
 struct dcs_cmd_list	cmdlist;
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+char *mipi_dsi_time_buffer = NULL;
+static struct workqueue_struct *test_wq;  
+static struct delayed_work test_dwq;
+static long report_pointer_time_ms = 0;
+EXPORT_SYMBOL(mipi_dsi_time_buffer);
+  
+unsigned int mipi_dsi_isr_point_offset = 0; 
+EXPORT_SYMBOL(mipi_dsi_isr_point_offset);
+
+extern int display_debug_record_start(void);
+#endif
 
 #ifdef CONFIG_FB_MSM_MDP40
 void mipi_dsi_mdp_stat_inc(int which)
@@ -93,6 +121,10 @@ void mipi_dsi_mdp_stat_inc(int which)
 void mipi_dsi_init(void)
 {
 	init_completion(&dsi_dma_comp);
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	init_completion(&dsi_bta_comp);
+	#endif
 	init_completion(&dsi_mdp_comp);
 	mipi_dsi_buf_alloc(&dsi_tx_buf, DSI_BUF_SIZE);
 	mipi_dsi_buf_alloc(&dsi_rx_buf, DSI_BUF_SIZE);
@@ -970,30 +1002,29 @@ void mipi_dsi_controller_cfg(int enable)
 
 	uint32 dsi_ctrl;
 	uint32 status;
-	int cnt;
+	u32 sleep_us = 1000;
+	u32 timeout_us = 16000;
 
-	cnt = 16;
-	while (cnt--) {
-		status = MIPI_INP(MIPI_DSI_BASE + 0x0004);
-		status &= 0x02;		/* CMD_MODE_DMA_BUSY */
-		if (status == 0)
-			break;
-		usleep(1000);
-	}
-	if (cnt == 0)
+	/* Check for CMD_MODE_DMA_BUSY */
+	if (readl_poll_timeout((MIPI_DSI_BASE + 0x0004),
+			   status,
+			   ((status & 0x02) == 0),
+			       sleep_us, timeout_us))
 		pr_info("%s: DSI status=%x failed\n", __func__, status);
 
-	cnt = 16;
-	while (cnt--) {
-		status = MIPI_INP(MIPI_DSI_BASE + 0x0008);
-		status &= 0x11111000;	/* x_HS_FIFO_EMPTY */
-		if (status == 0x11111000)	/* all empty */
-			break;
-		usleep(1000);
-	}
-
-	if (cnt == 0)
+	/* Check for x_HS_FIFO_EMPTY */
+	if (readl_poll_timeout((MIPI_DSI_BASE + 0x0008),
+			   status,
+			   ((status & 0x11111000) == 0x11111000),
+			       sleep_us, timeout_us))
 		pr_info("%s: FIFO status=%x failed\n", __func__, status);
+
+	/* Check for VIDEO_MODE_ENGINE_BUSY */
+	if (readl_poll_timeout((MIPI_DSI_BASE + 0x0004),
+			   status,
+			   ((status & 0x08) == 0),
+			       sleep_us, timeout_us))
+		pr_info("%s: DSI status=%x failed\n", __func__, status);
 
 	dsi_ctrl = MIPI_INP(MIPI_DSI_BASE + 0x0000);
 	if (enable)
@@ -1012,6 +1043,18 @@ void mipi_dsi_op_mode_config(int mode)
 
 	dsi_ctrl = MIPI_INP(MIPI_DSI_BASE + 0x0000);
 	dsi_ctrl &= ~0x07;
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	if (mode == DSI_VIDEO_MODE) {
+		dsi_ctrl |= 0x03;
+		intr_ctrl = DSI_INTR_CMD_DMA_DONE_MASK | DSI_INTR_BTA_DONE_MASK;
+	} else {		/* command mode */
+		dsi_ctrl |= 0x05;
+		intr_ctrl = DSI_INTR_CMD_DMA_DONE_MASK | DSI_INTR_ERROR_MASK |
+				DSI_INTR_CMD_MDP_DONE_MASK | DSI_INTR_BTA_DONE_MASK;
+	}
+	#else
+	/*add qcom patch to solve esd issue*/
 	if (mode == DSI_VIDEO_MODE) {
 		dsi_ctrl |= 0x03;
 		intr_ctrl = DSI_INTR_CMD_DMA_DONE_MASK;
@@ -1020,6 +1063,7 @@ void mipi_dsi_op_mode_config(int mode)
 		intr_ctrl = DSI_INTR_CMD_DMA_DONE_MASK | DSI_INTR_ERROR_MASK |
 				DSI_INTR_CMD_MDP_DONE_MASK;
 	}
+	#endif
 
 	pr_debug("%s: dsi_ctrl=%x intr=%x\n", __func__, dsi_ctrl, intr_ctrl);
 
@@ -1068,6 +1112,31 @@ void mipi_dsi_cmd_bta_sw_trigger(void)
 	pr_debug("%s: BTA done, cnt=%d\n", __func__, cnt);
 }
 
+#ifdef CONFIG_HW_ESD_DETECT
+/*add qcom patch to solve esd issue*/
+int mipi_dsi_wait_for_bta_ack(void)
+{
+	int ret = 0;
+	unsigned long flag;
+
+	mipi_dsi_clk_cfg(1);
+	spin_lock_irqsave(&dsi_mdp_lock, flag);
+	INIT_COMPLETION(dsi_bta_comp);
+	mipi_dsi_enable_irq(DSI_BTA_TERM);
+	spin_unlock_irqrestore(&dsi_mdp_lock, flag);
+	MIPI_OUTP(MIPI_DSI_BASE + 0x094, 0x01);	/* trigger */
+	wmb();
+	ret = wait_for_completion_killable_timeout(&dsi_bta_comp, HZ/10);
+	mipi_dsi_clk_cfg(0);
+	if (ret <= 0) {
+		mipi_dsi_disable_irq(DSI_BTA_TERM);
+		pr_err("DSI BTA error: %s %i\n", __func__, __LINE__);
+	}
+	/*clear error if have*/
+	return ret;
+}
+#endif
+
 static char set_tear_on[2] = {0x35, 0x00};
 static struct dsi_cmd_desc dsi_tear_on_cmd = {
 	DTYPE_DCS_WRITE1, 1, 0, 0, 0, sizeof(set_tear_on), set_tear_on};
@@ -1082,7 +1151,12 @@ void mipi_dsi_set_tear_on(struct msm_fb_data_type *mfd)
 
 	cmdreq.cmds = &dsi_tear_on_cmd;
 	cmdreq.cmds_cnt = 1;
+/*Qual Baseline Update,avoid backlight problem*/
+#ifdef CONFIG_HUAWEI_KERNEL
+	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
+#else
 	cmdreq.flags = CMD_REQ_COMMIT;
+#endif
 	cmdreq.rlen = 0;
 	cmdreq.cb = NULL;
 
@@ -1095,7 +1169,11 @@ void mipi_dsi_set_tear_off(struct msm_fb_data_type *mfd)
 
 	cmdreq.cmds = &dsi_tear_off_cmd;
 	cmdreq.cmds_cnt = 1;
+#ifdef CONFIG_HUAWEI_KERNEL
+	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
+#else
 	cmdreq.flags = CMD_REQ_COMMIT;
+#endif
 	cmdreq.rlen = 0;
 	cmdreq.cb = NULL;
 
@@ -1451,9 +1529,19 @@ int mipi_dsi_cmd_dma_tx(struct dsi_buf *tp)
 	MIPI_OUTP(MIPI_DSI_BASE + 0x08c, 0x01);	/* trigger */
 	wmb();
 	spin_unlock_irqrestore(&dsi_mdp_lock, flags);
-
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	if (!wait_for_completion_timeout(&dsi_dma_comp, HZ/10)) {
+		pr_err("Wait timedout: %s %i", __func__, __LINE__);
+		spin_lock_irqsave(&dsi_mdp_lock, flags);
+		dsi_ctrl_lock = FALSE;
+		spin_unlock_irqrestore(&dsi_mdp_lock, flags);
+		mipi_dsi_disable_irq(DSI_CMD_TERM);
+	}
+	#else
 	wait_for_completion(&dsi_dma_comp);
-
+	#endif
+	
 	dma_unmap_single(&dsi_dev, tp->dmap, tp->len, DMA_TO_DEVICE);
 	tp->dmap = 0;
 	return tp->len;
@@ -1519,7 +1607,19 @@ void mipi_dsi_cmd_mdp_busy(void)
 		/* wait until DMA finishes the current job */
 		pr_debug("%s: pending pid=%d\n",
 				__func__, current->pid);
+		#ifdef CONFIG_HW_ESD_DETECT
+		/*add qcom patch to solve esd issue*/
+		if (!wait_for_completion_timeout(&dsi_mdp_comp, HZ/10)) {
+			pr_err("Wait timedout: %s %i", __func__, __LINE__);
+			spin_lock_irqsave(&dsi_mdp_lock, flags);
+			dsi_ctrl_lock = FALSE;
+			dsi_mdp_busy = FALSE;
+			spin_unlock_irqrestore(&dsi_mdp_lock, flags);
+			mipi_dsi_disable_irq(DSI_MDP_TERM);
+		}
+		#else
 		wait_for_completion(&dsi_mdp_comp);
+		#endif
 	}
 	pr_debug("%s: done pid=%d\n",
 				__func__, current->pid);
@@ -1555,7 +1655,9 @@ void mipi_dsi_cmdlist_tx(struct dcs_cmd_req *req)
 		req->cb(ret);
 
 }
-
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+static char *lp;
+#endif
 void mipi_dsi_cmdlist_rx(struct dcs_cmd_req *req)
 {
 	int len;
@@ -1571,17 +1673,25 @@ void mipi_dsi_cmdlist_rx(struct dcs_cmd_req *req)
 
 	len = mipi_dsi_cmds_rx_new(tp, rp, req, req->rlen);
 	dp = (u32 *)rp->data;
-
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+	lp = (char *)rp->data;
+#endif
 	if (req->cb)
 		req->cb(*dp);
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+	if (req->cb_hw)
+		req->cb_hw(lp);
+#endif
 }
 
 void mipi_dsi_cmdlist_commit(int from_mdp)
 {
 	struct dcs_cmd_req *req;
 	u32 dsi_ctrl;
-
+	/*fix qcom command list bug*/
+	#ifndef CONFIG_HUAWEI_KERNEL
 	mutex_lock(&cmd_mutex);
+	#endif
 	req = mipi_dsi_cmdlist_get();
 
 	/* make sure dsi_cmd_mdp is idle */
@@ -1615,8 +1725,10 @@ need_lock:
 
 	if (from_mdp) /* from pipe_commit */
 		mipi_dsi_cmd_mdp_start();
-
+	/*fix qcom command list bug*/
+	#ifndef CONFIG_HUAWEI_KERNEL
 	mutex_unlock(&cmd_mutex);
+	#endif
 }
 
 int mipi_dsi_cmdlist_put(struct dcs_cmd_req *cmdreq)
@@ -1638,8 +1750,10 @@ int mipi_dsi_cmdlist_put(struct dcs_cmd_req *cmdreq)
 		cmdlist.get %= CMD_REQ_MAX;
 		cmdlist.tot--;
 	}
+	/*fix qcom command list bug*/
+	#ifndef CONFIG_HUAWEI_KERNEL
 	mutex_unlock(&cmd_mutex);
-
+	#endif
 	ret++;
 	pr_debug("%s: tot=%d put=%d get=%d\n", __func__,
 		cmdlist.tot, cmdlist.put, cmdlist.get);
@@ -1652,7 +1766,10 @@ int mipi_dsi_cmdlist_put(struct dcs_cmd_req *cmdreq)
 
 	if (req->flags & CMD_CLK_CTRL)
 		mipi_dsi_clk_cfg(0);
-
+	/*fix qcom command list bug*/
+	#ifdef CONFIG_HUAWEI_KERNEL
+	mutex_unlock(&cmd_mutex);
+	#endif
 	return ret;
 }
 
@@ -1736,6 +1853,73 @@ void mipi_dsi_error(void)
 	mipi_dsi_dln0_phy_err();	/* mask0, 0x3e00000 */
 }
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+/*****************************************
+  @func_name:  mipi_isr_delay_func
+  @para: work
+  @func: deal the mipi  isr event
+  @return  void
+******************************************/
+static void mipi_isr_delay_func(struct work_struct *work)  
+{  
+	static  unsigned int i=0;
+	
+	mipi_dsi_isr_point_offset  = strlen(mipi_dsi_time_buffer);			
+
+	sprintf((mipi_dsi_time_buffer+mipi_dsi_isr_point_offset),"%d%s%ld%s%s",\
+	i++,DISPLAY_BREAK ,report_pointer_time_ms,DISPLAY_BREAK,"\n");
+
+	
+	if(RECORD_BUFFER_THRESHOLD < mipi_dsi_isr_point_offset)
+	{
+	        printk("clear mipi_dsi_time_buffer \n");
+	        memset(mipi_dsi_time_buffer,0,sizeof(mipi_dsi_time_buffer));
+	}
+}  
+/*****************************************
+  @func_name:  mipi_dsi_isr_workqueue_init
+  @para: void
+  @func: init the mipi isr record workqueue
+  @return  void
+******************************************/  
+int  mipi_dsi_isr_workqueue_init(void)  
+{  
+    test_wq = create_workqueue("test_wq_mipi");  
+    if (!test_wq) {  
+        printk(KERN_ERR "No memory for workqueue\n");  
+        return 1;     
+    }  
+    printk(KERN_INFO "Create mipi_dsi_isr_workqueue successful!\n");  
+  
+    INIT_DELAYED_WORK(&test_dwq, mipi_isr_delay_func);  
+
+    return 0;  
+}  
+EXPORT_SYMBOL(mipi_dsi_isr_workqueue_init);
+/*****************************************
+  @func_name:  mipi_dsi_isr_display_time
+  @para: void
+  @func: mipi isr record time handler
+  @return  
+******************************************/
+ int mipi_dsi_isr_display_time(void)
+{ 
+	struct timespec ts;
+
+	if(0 == display_debug_record_start())
+	{
+		return 0;
+	}
+	ktime_get_ts(&ts);
+	report_pointer_time_ms = ts.tv_sec*1000 + ts.tv_nsec/1000000;
+
+	queue_delayed_work(test_wq, &test_dwq, 0); 
+
+	return 1;
+}
+
+EXPORT_SYMBOL(mipi_dsi_isr_display_time);
+#endif
 
 irqreturn_t mipi_dsi_isr(int irq, void *ptr)
 {
@@ -1777,8 +1961,19 @@ irqreturn_t mipi_dsi_isr(int irq, void *ptr)
 		mipi_dsi_disable_irq_nosync(DSI_MDP_TERM);
 		complete(&dsi_mdp_comp);
 		spin_unlock(&dsi_mdp_lock);
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+		/*  record mipi  isr  int event time */
+		mipi_dsi_isr_display_time();
+#endif
 	}
-
-
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	if (isr & DSI_INTR_BTA_DONE) {
+		spin_lock(&dsi_mdp_lock);
+		complete(&dsi_bta_comp);
+		mipi_dsi_disable_irq_nosync(DSI_BTA_TERM);
+		spin_unlock(&dsi_mdp_lock);
+	}
+	#endif
 	return IRQ_HANDLED;
 }

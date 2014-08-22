@@ -61,6 +61,10 @@ struct msm_camera_device_platform_data {
 	struct msm_camera_io_ext ioext;
 	struct msm_camera_io_clk ioclk;
 	uint8_t csid_core;
+	uint8_t is_csiphy;
+	uint8_t is_csic;
+	uint8_t is_csid;
+	uint8_t is_ispif;
 	uint8_t is_vpe;
 	struct msm_bus_scale_pdata *cam_bus_scale_table;
 };
@@ -194,6 +198,10 @@ struct msm_camera_gpio_conf {
 	uint8_t camera_off_table_size;
 	uint32_t *camera_on_table;
 	uint8_t camera_on_table_size;
+	struct msm_gpio_set_tbl *cam_gpio_req_init_tbl;
+	uint8_t cam_gpio_req_init_tbl_size;
+	struct msm_gpio_set_tbl *cam_gpio_config_tbl_power_down;
+	uint8_t cam_gpio_config_tbl_power_down_size;
 };
 
 enum msm_camera_i2c_mux_mode {
@@ -233,6 +241,8 @@ enum msm_camera_actuator_name {
 	MSM_ACTUATOR_MAIN_CAM_3,
 	MSM_ACTUATOR_MAIN_CAM_4,
 	MSM_ACTUATOR_MAIN_CAM_5,
+	MSM_ACTUATOR_MAIN_CAM_6,
+	MSM_ACTUATOR_MAIN_CAM_9,
 	MSM_ACTUATOR_WEB_CAM_0,
 	MSM_ACTUATOR_WEB_CAM_1,
 	MSM_ACTUATOR_WEB_CAM_2,
@@ -276,6 +286,9 @@ struct msm_camera_sensor_info {
 	struct msm_actuator_info *actuator_info;
 	int pmic_gpio_enable;
 	struct msm_eeprom_info *eeprom_info;
+	int  standby_is_supported;
+	int  standby_mode; 
+	int  en_clk_first;
 };
 
 struct msm_camera_board_info {
@@ -590,6 +603,9 @@ int msm_add_sdcc(unsigned int controller,
 		struct mmc_platform_data *plat);
 
 void msm_pm_register_irqs(void);
+#ifdef CONFIG_HUAWEI_KERNEL
+int __init hw_extern_sdcard_add_device(void);
+#endif
 struct msm_usb_host_platform_data;
 int msm_add_host(unsigned int host,
 		struct msm_usb_host_platform_data *plat);

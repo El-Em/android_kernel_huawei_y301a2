@@ -27,7 +27,24 @@
 #include <linux/time.h>
 #include "logger.h"
 
+#include <linux/init.h>
 #include <asm/ioctls.h>
+#ifdef CONFIG_HUAWEI_KERNEL
+#include <asm/sections.h>
+#endif
+
+#define USER_LOG_ON 1
+#define USER_LOG_OFF 0
+// DTS************  steady team 20120913 begin
+#if defined(CONFIG_HUAWEI_KERNEL)
+/* add log switch, control logmian ect logs can write in or not */
+static atomic_t log_switch = ATOMIC_INIT(USER_LOG_OFF);
+static int minor_of_exception = 0;
+static int minor_of_events = 0;
+static int minor_of_main = 0;
+static int minor_of_power = 0;
+#endif
+// DTS************  steady team 20120913 end
 
 /*
  * struct logger_log - represents a specific log, such as 'main' or 'radio'
@@ -438,6 +455,67 @@ static ssize_t do_write_log_from_user(struct logger_log *log,
 	return count;
 }
 
+#ifdef CONFIG_HUAWEI_KERNEL
+/*
+ * get_log_entry - get the log priority and tag from iov structure
+ *
+ */
+static void get_log_entry(const struct iovec *iov, unsigned long nr_segs, char *priority, char *tag, int taglen)
+{
+    int minlen = 0;
+    int index = 0;
+    
+    if ((NULL == iov) || (NULL == priority) || (NULL == tag))
+    {
+        return;
+    }
+    
+    while (nr_segs-- > 0)
+    { 
+        if (NULL == iov->iov_base)
+        {
+            return;
+        }
+        
+        if (0 == index)
+        {
+            if (1 != iov->iov_len)
+            {
+                *priority = 0;
+            }
+            else
+            {
+                /* Replace with copy_from_user to solve device crash issue when monkey testing */
+                if (copy_from_user(priority, iov->iov_base, iov->iov_len))
+                {
+                    printk("copy_from_user error, can't get the log priority\n");
+                    return;
+                }
+            }
+        }
+        else if (1 == index)
+        {
+            minlen = iov->iov_len > taglen ? taglen : iov->iov_len;
+            /* Replace memcpy with copy_from_user to solve device crash issue when monkey testing */
+            if (copy_from_user(tag, iov->iov_base, minlen))
+            {
+                printk("copy_from_user error, can't get the log tag\n");
+                return;
+            }
+        }
+        else
+        {
+            break;
+        }
+        
+        index++;
+        iov++;
+    }
+    
+    return;
+}
+#endif
+
 /*
  * logger_aio_write - our write method, implementing support for write(),
  * writev(), and aio_write(). Writes are our fast path, and we try to optimize
@@ -452,6 +530,28 @@ ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	struct timespec now;
 	ssize_t ret = 0;
 
+#ifdef CONFIG_HUAWEI_KERNEL
+    char priority = 0;
+    char tag[MAX_TAG_LEN] = {0};
+    get_log_entry(iov, nr_segs, &priority, tag, sizeof(tag));
+    tag[sizeof(tag) - 1] = 0;
+#endif    
+// DTS************  steady team 20120913 begin
+#if defined(CONFIG_HUAWEI_KERNEL)
+    /* log control */
+    /* if log device is events or main which its priority is more than ANDROID_LOG_INFO, we also pass it */
+    if (USER_LOG_ON == atomic_read(&log_switch) || minor_of_exception == log->misc.minor
+        || minor_of_power == log->misc.minor || minor_of_events == log->misc.minor 
+        || ((minor_of_main == log->misc.minor) && (priority >= ANDROID_LOG_INFO)))
+    {
+        /* log it */
+    }
+    else
+    {
+        return -1;
+    }
+#endif
+// DTS************  steady team 20120913 end
 	now = current_kernel_time();
 
 	header.pid = current->tgid;
@@ -687,6 +787,13 @@ static long logger_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		reader = file->private_data;
 		ret = logger_set_version(reader, argp);
 		break;
+#if defined(CONFIG_HUAWEI_KERNEL)     
+       case FIONREAD:
+            if (minor_of_power == log->misc.minor) {
+                ret = -ENOTTY;
+            }
+            break; 
+#endif
 	}
 
 	mutex_unlock(&log->mutex);
@@ -732,6 +839,8 @@ DEFINE_LOGGER_DEVICE(log_main, LOGGER_LOG_MAIN, 256*1024)
 DEFINE_LOGGER_DEVICE(log_events, LOGGER_LOG_EVENTS, 256*1024)
 DEFINE_LOGGER_DEVICE(log_radio, LOGGER_LOG_RADIO, 256*1024)
 DEFINE_LOGGER_DEVICE(log_system, LOGGER_LOG_SYSTEM, 256*1024)
+DEFINE_LOGGER_DEVICE(log_exception, LOGGER_LOG_EXCEPTION, 16*1024)
+DEFINE_LOGGER_DEVICE(log_power, LOGGER_LOG_POWER, 16*1024)
 
 static struct logger_log *get_log_from_minor(int minor)
 {
@@ -743,9 +852,88 @@ static struct logger_log *get_log_from_minor(int minor)
 		return &log_radio;
 	if (log_system.misc.minor == minor)
 		return &log_system;
+#if defined(CONFIG_HUAWEI_KERNEL)
+	if (log_exception.misc.minor == minor)
+		return &log_exception;
+    if (log_power.misc.minor == minor)
+        return &log_power;
+#endif
 	return NULL;
 }
+// DTS************  steady team 20120913 begin
+#ifdef CONFIG_HUAWEI_KERNEL
+static int open_state = 0;
 
+static int log_switch_open(struct inode *inode, struct file *file)
+{
+    if (open_state == 0)
+    {
+        open_state = 1;
+        printk("log_switch open!\n");
+        return 0;  
+    }
+    printk("log_switch has been open!\n");
+    return -1;
+}
+
+static int log_switch_release(struct inode *ignored, struct file *file)
+{
+    if (open_state == 1)
+    {
+        open_state = 0;
+        printk("log_switch release!\n");
+        return 0;
+    }
+    printk("log_switch has not been open yet!\n");
+    return -1;
+}
+
+static ssize_t log_switch_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+{
+    int ret = 0;
+    #define STR_LEN_12 12
+    char szbuf[STR_LEN_12] = {0};
+
+    memset(szbuf, 0, STR_LEN_12);
+    snprintf(szbuf, STR_LEN_12, "%d", atomic_read(&log_switch));
+    printk("In %s, log_switch=%s\n", __FUNCTION__, szbuf);
+
+    ret = copy_to_user(buf, szbuf, strlen(szbuf));
+    return ret;
+}
+
+static ssize_t log_switch_write(struct file * file, const char __user * buf, size_t count, loff_t * pos)
+{
+    int val = 0;
+    char * e;
+    printk("In %s, buf=%s, count=%d\n", __FUNCTION__, buf, count);
+
+    val = simple_strtoull(buf, &e, 10);
+    if (e == buf)
+    {
+        printk("%s, invalid args!", __FUNCTION__);
+        return -EINVAL;
+    }
+    atomic_set(&log_switch, val);
+    return count;
+}
+
+static const struct file_operations log_switch_fops = {
+    .owner = THIS_MODULE,
+    .read = log_switch_read,
+    .write = log_switch_write,
+    .open = log_switch_open,
+    .release = log_switch_release,
+};
+
+static struct miscdevice log_switch_misc_dev = { 
+    .minor = MISC_DYNAMIC_MINOR, 
+    .name = "log_switch", 
+    .fops = &log_switch_fops, 
+    .parent = NULL, 
+};
+#endif
+    // DTS************  steady team 20120913 end
 static int __init init_log(struct logger_log *log)
 {
 	int ret;
@@ -762,11 +950,52 @@ static int __init init_log(struct logger_log *log)
 
 	return 0;
 }
+#ifdef CONFIG_HUAWEI_KERNEL
+static char address_save_buf[1024];
+void save_address_to_crash_dump(const char *fmt, ...)
+{
+    va_list args;
+    static int printed_len;
 
+    if (!printed_len || printed_len >= sizeof(address_save_buf))
+    {
+        printed_len = sprintf(address_save_buf, "address_save_buf=%p; ",
+                                            address_save_buf);
+    }
+
+    va_start(args, fmt);
+    printed_len += vscnprintf(address_save_buf + printed_len,
+                      sizeof(address_save_buf) - printed_len, fmt, args);
+    va_end(args);
+}
+EXPORT_SYMBOL(save_address_to_crash_dump);
+#endif
+static int is_logcat_enabled = 1;   /* default to 1 (enabled) */
+
+static int __init is_logcat_enabled_setup(char *enabled)
+{
+    if (strncmp(enabled, "true", 4) == 0) {
+        is_logcat_enabled = 1;
+    } else if (strncmp(enabled, "false", 5) == 0) {
+        is_logcat_enabled = 0;
+    }
+
+    printk(KERN_INFO "%s: is_logcat_enabled == %d\n", __FUNCTION__,
+            is_logcat_enabled);
+    
+    return 1;
+}
+__setup("logcat_enabled=", is_logcat_enabled_setup);
 static int __init logger_init(void)
 {
 	int ret;
+#ifdef CONFIG_HUAWEI_KERNEL
+    printk(KERN_INFO "%s: is_logcat_enabled == %d\n", __FUNCTION__,
+            is_logcat_enabled);
 
+    /*regardless nv is on,create log devices, kernel control whether can write*/
+    atomic_set(&log_switch, is_logcat_enabled);
+#endif
 	ret = init_log(&log_main);
 	if (unlikely(ret))
 		goto out;
@@ -782,6 +1011,45 @@ static int __init logger_init(void)
 	ret = init_log(&log_system);
 	if (unlikely(ret))
 		goto out;
+
+#if defined(CONFIG_HUAWEI_KERNEL)
+    ret = init_log(&log_exception);
+    if (unlikely(ret))
+        goto out;
+    ret = init_log(&log_power);
+    if (unlikely(ret))
+        goto out;
+    /* record the minor of exception node */
+    minor_of_exception = log_exception.misc.minor;
+    minor_of_power = log_power.misc.minor;
+    minor_of_events = log_events.misc.minor;
+    minor_of_main = log_main.misc.minor;
+    printk("%s, minor_of_events=%d\n", __FUNCTION__, minor_of_events);
+    printk("%s, minor_of_main=%d\n", __FUNCTION__, minor_of_main);
+    printk("%s, minor_of_exception=%d\n", __FUNCTION__, minor_of_exception);
+
+    ret = misc_register(&log_switch_misc_dev);
+    if (unlikely(ret))
+    {
+        printk(KERN_ERR "logger: failed to register misc "
+                "device for log '%s'!\n", log_switch_misc_dev.name);
+        goto out;
+    }
+#endif
+
+#ifdef CONFIG_HUAWEI_KERNEL
+    save_address_to_crash_dump(" __init_begin=%p;", __init_begin);
+    save_address_to_crash_dump(" _end=%p;", _end);
+    save_address_to_crash_dump(" log_main=%p-%d;",
+                        virt_to_phys(_buf_log_main), log_main.size);
+    save_address_to_crash_dump(" log_events=%p-%d;",
+                            virt_to_phys(_buf_log_events), log_events.size);
+    save_address_to_crash_dump(" log_radio=%p-%d;",
+                            virt_to_phys(_buf_log_radio), log_radio.size);
+    save_address_to_crash_dump(" log_system=%p-%d;",
+            virt_to_phys(_buf_log_system), log_system.size);
+#endif
+
 
 out:
 	return ret;

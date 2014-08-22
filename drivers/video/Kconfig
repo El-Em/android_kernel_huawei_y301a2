@@ -343,6 +343,9 @@ config FB_ACORN
 	  hardware found in Acorn RISC PCs and other ARM-based machines.  If
 	  unsure, say N.
 
+config FEATURE_HW_DISP_TEST_DBG
+          bool "support LCD debug test"
+	  default n
 config FB_CLPS711X
 	bool "CLPS711X LCD support"
 	depends on (FB = y) && ARM && ARCH_CLPS711X

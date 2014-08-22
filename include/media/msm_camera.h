@@ -237,6 +237,8 @@
 #define MSM_CAM_IOCTL_AXI_RELEASE \
 	_IO(MSM_CAM_IOCTL_MAGIC, 67)
 
+#define MSM_CAM_IOCTL_GET_SENSOR_INFO_PROJECTMENU \
+	_IOR(MSM_CAM_IOCTL_MAGIC, 90, struct msm_camsensor_info *)
 struct v4l2_event_and_payload {
 	struct v4l2_event evt;
 	uint32_t payload_length;
@@ -269,7 +271,11 @@ struct msm_mctl_post_proc_cmd {
 #define MSM_CAMERA_LED_HIGH 2
 #define MSM_CAMERA_LED_INIT 3
 #define MSM_CAMERA_LED_RELEASE 4
-
+#define MSM_CAMERA_LED_TORCH 5
+#define MSM_CAMERA_LED_TORCH_LOW    6
+#define MSM_CAMERA_LED_TORCH_MIDDLE 7
+#define MSM_CAMERA_LED_TORCH_HIGH   8
+#define MSM_CAMERA_LED_MMI   9
 #define MSM_CAMERA_STROBE_FLASH_NONE 0
 #define MSM_CAMERA_STROBE_FLASH_XENON 1
 
@@ -1770,6 +1776,8 @@ enum af_camera_name {
 	ACTUATOR_MAIN_CAM_3,
 	ACTUATOR_MAIN_CAM_4,
 	ACTUATOR_MAIN_CAM_5,
+	ACTUATOR_MAIN_CAM_6,
+	ACTUATOR_MAIN_CAM_9,
 	ACTUATOR_WEB_CAM_0,
 	ACTUATOR_WEB_CAM_1,
 	ACTUATOR_WEB_CAM_2,
@@ -1936,6 +1944,7 @@ struct msm_camsensor_info {
 	int mount_angle;
 	uint32_t max_width;
 	uint32_t max_height;
+	int flip_and_mirror;
 };
 
 #define V4L2_SINGLE_PLANE	0

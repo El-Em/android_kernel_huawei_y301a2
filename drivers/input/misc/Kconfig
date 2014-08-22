@@ -655,3 +655,26 @@ config STM_LIS3DH
           acceleration sensors LIS3DH.
 
 endif
+
+#/*delete select SERIO*/
+config  HUAWEI_FEATURE_PROXIMITY_EVERLIGHT_APS_12D
+	depends on HUAWEI_KERNEL
+	default n
+	tristate "EVERLIGHT APS-12D Proximity"
+	help
+         Say Y here if you have a everlight aps-12d proximity.
+          If unsure, say N.
+          To compile this driver as a module, choose M here: the
+          module will be called aps-12d.
+
+config  HUAWEI_FEATURE_PROXIMITY_EVERLIGHT_APS_9900
+        depends on HUAWEI_KERNEL
+        default n
+        tristate "EVERLIGHT APS-9900 Proximity"
+        help
+         Say Y here if you have a everlight aps-12d proximity.
+          If unsure, say N.
+
+          To compile this driver as a module, choose M here: the
+          module will be called aps-9900.
+

@@ -51,6 +51,10 @@ module_param_named(debug_mask, debug_mask, int, S_IRUGO | S_IWUSR | S_IWGRP);
 /* support old usespace code */
 #define ANDROID_ALARM_SET_OLD               _IOW('a', 2, time_t) /* set alarm */
 #define ANDROID_ALARM_SET_AND_WAIT_OLD      _IOW('a', 3, time_t)
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+#define ALARM_AHEAD_TIME    (60)
+struct rtc_wkalrm poweroff_rtc_alarm;
+#endif
 
 struct alarm_queue {
 	struct rb_root alarms;
@@ -324,6 +328,53 @@ alarm_update_timedelta(struct timespec tmp_time, struct timespec new_time)
 	spin_unlock_irqrestore(&alarm_slock, flags);
 }
 
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+/*set alarm to rtc, it's used for power-off alarm*/
+int alarm_set_rtc_alarm(long time_sec, bool enable_irq)
+{
+	int err = 0;
+	struct timespec tmp_time;
+	struct rtc_time rtc_current_rtc_time;
+	unsigned long rtc_current_time;
+	unsigned long offset, alarm_value;
+
+	getnstimeofday(&tmp_time);
+	rtc_read_time(alarm_rtc_dev, &rtc_current_rtc_time);
+	rtc_tm_to_time(&rtc_current_rtc_time, &rtc_current_time);
+	offset = tmp_time.tv_sec - rtc_current_time;
+	printk(KERN_INFO "%ld,%ld - %ld = %ld\n",time_sec,
+	       tmp_time.tv_sec, rtc_current_time, offset);
+
+	memset(&poweroff_rtc_alarm, 0, sizeof(poweroff_rtc_alarm));
+
+	alarm_value = time_sec - offset;
+	if (likely(time_sec &&
+		   (alarm_value > (ALARM_AHEAD_TIME + rtc_current_time)))) {
+		rtc_time_to_tm(alarm_value - ALARM_AHEAD_TIME,
+			       &poweroff_rtc_alarm.time);
+		poweroff_rtc_alarm.enabled = (enable_irq == true ? 1 : 0);
+	} else {
+		printk(KERN_DEBUG "%s(): remove rtc alarm\n", __FUNCTION__);
+		/* set current as alarm time, and turn off the irq */
+		rtc_time_to_tm(rtc_current_time, &poweroff_rtc_alarm.time);
+		poweroff_rtc_alarm.enabled = 0;
+	}
+
+	err = rtc_set_alarm(alarm_rtc_dev, &poweroff_rtc_alarm);
+	printk(KERN_INFO "%s: [%d-%d-%d] [%d:%d:%d] return: %d\n",
+	       __FUNCTION__,
+	       poweroff_rtc_alarm.time.tm_year + 1900,
+	       poweroff_rtc_alarm.time.tm_mon + 1,
+	       poweroff_rtc_alarm.time.tm_mday,
+	       poweroff_rtc_alarm.time.tm_hour,
+	       poweroff_rtc_alarm.time.tm_min,
+	       poweroff_rtc_alarm.time.tm_sec,
+	       err);
+
+	return err;
+}
+#endif
+
 /**
  * alarm_get_elapsed_realtime - get the elapsed real time in ktime_t format
  *
@@ -468,14 +519,36 @@ static int alarm_suspend(struct platform_device *pdev, pm_message_t state)
 static int alarm_resume(struct platform_device *pdev)
 {
 	struct rtc_wkalrm alarm;
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+	struct rtc_time     rtc_current_rtc_time;
+	int                 ret;
+	unsigned long       rtc_current_time;
+	unsigned long       poweroff_alarm_time;
+#endif
 	unsigned long       flags;
 
 	pr_alarm(SUSPEND, "alarm_resume(%p)\n", pdev);
+
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+	rtc_tm_to_time(&poweroff_rtc_alarm.time, &poweroff_alarm_time);
+	rtc_read_time(alarm_rtc_dev, &rtc_current_rtc_time);
+	rtc_tm_to_time(&rtc_current_rtc_time, &rtc_current_time);
+
+	if (poweroff_rtc_alarm.enabled &&
+			(rtc_current_time + 1 < poweroff_alarm_time)) {
+		ret = rtc_set_alarm(alarm_rtc_dev, &poweroff_rtc_alarm);
+		if (likely(ret == 0))
+			goto update_timer;
+	}
+#endif
 
 	memset(&alarm, 0, sizeof(alarm));
 	alarm.enabled = 0;
 	rtc_set_alarm(alarm_rtc_dev, &alarm);
 
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+update_timer:
+#endif
 	spin_lock_irqsave(&alarm_slock, flags);
 	suspended = false;
 	update_timer_locked(&alarms[ANDROID_ALARM_RTC_WAKEUP], false);
@@ -576,6 +649,9 @@ static int __init alarm_driver_init(void)
 	int err;
 	int i;
 
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+	memset(&poweroff_rtc_alarm, 0, sizeof(poweroff_rtc_alarm));
+#endif
 	for (i = 0; i < ANDROID_ALARM_SYSTEMTIME; i++) {
 		hrtimer_init(&alarms[i].timer,
 				CLOCK_REALTIME, HRTIMER_MODE_ABS);

@@ -113,6 +113,14 @@ config FB_MSM_MIPI_DSI
 	bool
 	default n
 
+config HUAWEI_ENABLE_MIPI_READ
+	bool
+	default n
+	tristate "Mipi register read function"
+		---help---
+			Say Y here if you know what you are doing.
+			If unsure, say N.
+
 config FB_MSM_LCDC
 	bool
 	default n
@@ -395,7 +403,47 @@ config FB_MSM_MIPI_CHIMEI_WUXGA
 	  The panel is using a serial LVDS input.
 	  The panel is connected to the host
 	  via Toshiba DSI-to-LVDS bridge.
+	  
+config FB_HUAWEI_MIPI_DSI_RSP61408
+	bool "MIPI Chimei RSP61408 WVGA Panel"
+	select FB_MSM_MIPI_DSI
+	default n
 
+config FB_HUAWEI_MIPI_DSI_NT35510
+	bool "support MIPI NT35510"
+	select FB_MSM_MIPI_DSI
+	default n
+
+config FB_HUAWEI_MIPI_DSI_R63308
+	bool "MIPI Toshiba R63308 720P Panel"
+	select FB_MSM_MIPI_DSI
+	default n
+config FB_HUAWEI_MIPI_DSI_NT35516_QHD
+	bool "support MIPI NT35516 qhd"
+	select FB_MSM_MIPI_DSI
+	default n
+config FB_HUAWEI_MIPI_DSI_HX8369A
+	bool "support MIPI HX8369A"
+	select FB_MSM_MIPI_DSI
+	default n
+config FB_HUAWEI_MIPI_DSI_OTM9608A_QHD
+	bool "support MIPI OTM9608A qhd"
+	select FB_MSM_MIPI_DSI
+	default n
+config FB_HUAWEI_MIPI_DSI_OTM8009A_WVGA
+	bool "support MIPI OTM8009A wvga"
+	select FB_MSM_MIPI_DSI
+	default n
+config FB_HUAWEI_MIPI_DSI_OTM1282A_HD
+	bool "support MIPI OTM1282A hd"
+	select FB_MSM_MIPI_DSI
+	default n
+config FEATURE_HW_DISP_TEST_DBG
+          bool "support LCD debug test"
+	  default n
+config HW_ESD_DETECT
+          bool "support display subsystem esd check"
+	  default n
 config FB_MSM_MIPI_TRULY_VIDEO_WVGA_PT
 	bool
 	select FB_MSM_MIPI_DSI_TRULY
@@ -934,6 +982,16 @@ config FB_MSM_DEFAULT_DEPTH_RGBA8888
 
 endchoice
 
+#/* Add code for automatic CABC function */
+config FB_AUTO_CABC
+	bool "Support for AUTO_CABC fuction"
+	depends on FB_MSM
+	default n
+	
+#/* config PM8038 CABC pin function */
+config FB_PM8038_CABC_PIN
+	bool "Support PM8038 CABC fuction pin"
+	default n
 config FB_MSM_EBI2_EPSON_S1D_QVGA_PANEL
 	bool "EBI2 Epson QVGA Panel"
 	select FB_MSM_EBI2
@@ -948,6 +1006,11 @@ config FB_MSM_EBI2_PANEL_DETECT
 	---help---
 	  Support for EBI2 panel auto detect
 
+#/* add the code for dynamic gamma function */
+config FB_DYNAMIC_GAMMA
+	bool "Support  DYNAMIC_GAMMA fuction for LCD"
+	depends on FB_MSM
+	default n
 if FB_MSM_MDSS
 	source "drivers/video/msm/mdss/Kconfig"
 endif

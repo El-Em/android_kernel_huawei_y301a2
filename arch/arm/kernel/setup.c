@@ -745,6 +745,27 @@ static int __init parse_tag_cmdline(const struct tag *tag)
 
 __tagtable(ATAG_CMDLINE, parse_tag_cmdline);
 
+#define RUNMODE_FLAG_FACTORY 1
+#define RUNMODE_FLAG_NORMAL 0
+
+static unsigned int runmode_factory = RUNMODE_FLAG_NORMAL;
+
+int __init parse_tag_runmode_flag (const struct tag* tags )
+{
+    runmode_factory = (int)tags->u.revision.rev;
+    printk("Factory : parse_tag_runmode_flag() = %d\n", runmode_factory);
+    return 0;
+}
+__tagtable(ATAG_RUNMODE_FLAG, parse_tag_runmode_flag);
+/* the function interface to check factory/normal mode in kernel */
+bool is_runmode_factory(void)
+{
+    if (RUNMODE_FLAG_FACTORY == runmode_factory)
+        return true;
+    else
+        return false;
+}
+
 /*
  * Scan the tag table for this tag, and call its parse function.
  * The tag table is built by the linker from all the __tagtable
@@ -931,10 +952,61 @@ static int __init meminfo_cmp(const void *_a, const void *_b)
 	return cmp < 0 ? -1 : cmp > 0 ? 1 : 0;
 }
 
+#ifdef CONFIG_SRECORDER_MSM
+#define NUM_LEN (24) /* max length of string */
+#define SRECORDER_RESERVED_MEM_TAG "memmap"
+extern unsigned long get_srecorder_reserved_mem_phys_start_addr(void);
+extern unsigned long get_srecorder_reserved_mem_size(void);
+/*
+ * Function:       static int convert_num2char(char *pbuf, int buf_len, unsigned long num2convert)
+ * Description:    convert address to char, unit of address is K or M
+ * Return:         0£ºsuccess -1£ºfail
+ */
+static int convert_num2char(char *pbuf, int buf_len, unsigned long num2convert)
+{
+    if (NULL == pbuf)
+    {
+        return -1;
+    }
+
+    if (0 != num2convert % SZ_1K)
+    {
+        snprintf(pbuf, buf_len, "%lu", num2convert);
+    }
+    else
+    {
+        if (0 == num2convert % SZ_1M)
+        {
+            snprintf(pbuf, buf_len, "%luM", num2convert /= SZ_1M);
+        }
+        else
+        {
+            snprintf(pbuf, buf_len, "%luK", num2convert /= SZ_1K);
+        }
+    }
+    
+    return 0;
+}
+
+struct resource srecorder_res = 
+{
+	.name  = "SRecorder",
+	.start = 0,
+	.end   = 0,
+	.flags = IORESOURCE_BUSY | IORESOURCE_MEM
+};
+#endif /* CONFIG_SRECORDER_MSM */
+
 void __init setup_arch(char **cmdline_p)
 {
 	struct machine_desc *mdesc;
-
+#ifdef CONFIG_SRECORDER_MSM
+    char memmap_tag[64] = {0}; /* max length of memmap field */
+    char size_temp_buf[NUM_LEN]; 
+    char start_addr_temp_buf[NUM_LEN];
+    unsigned long srecorder_reserved_mem_phys_start_addr = 0x0;
+    unsigned long srecorder_reserved_mem_size = 0x0;
+#endif /* CONFIG_SRECORDER_MSM */
 	setup_processor();
 	mdesc = setup_machine_fdt(__atags_pointer);
 	if (!mdesc)
@@ -964,6 +1036,24 @@ void __init setup_arch(char **cmdline_p)
 	sort(&meminfo.bank, meminfo.nr_banks, sizeof(meminfo.bank[0]), meminfo_cmp, NULL);
 	sanity_check_meminfo();
 	arm_memblock_init(&meminfo, mdesc);
+
+#ifdef CONFIG_SRECORDER_MSM
+    /* Notes: this code should be executed after arm_memblock_init, because of the action operated by arm_memblock_init */
+    srecorder_reserved_mem_phys_start_addr = get_srecorder_reserved_mem_phys_start_addr();
+    srecorder_reserved_mem_size = get_srecorder_reserved_mem_size();
+    if (0L != srecorder_reserved_mem_phys_start_addr)
+    {
+        convert_num2char(size_temp_buf, NUM_LEN, srecorder_reserved_mem_size);
+        convert_num2char(start_addr_temp_buf, NUM_LEN, srecorder_reserved_mem_phys_start_addr);
+
+        snprintf(memmap_tag, sizeof(memmap_tag), " %s=%s$%s", SRECORDER_RESERVED_MEM_TAG, size_temp_buf, start_addr_temp_buf);
+        strcat(boot_command_line, memmap_tag);
+    }
+    else
+    {
+        printk(KERN_ERR ">>>> Can't allocate memory for S-Recorder\n");
+    }
+#endif /* CONFIG_SRECORDER_MSM */
 
 	paging_init(mdesc);
 	request_standard_resources(mdesc);

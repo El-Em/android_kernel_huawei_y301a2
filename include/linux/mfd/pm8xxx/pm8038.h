@@ -34,6 +34,7 @@
 #include <linux/mfd/pm8xxx/ccadc.h>
 #include <linux/mfd/pm8xxx/spk.h>
 #include <linux/mfd/pm8xxx/tm.h>
+#include <linux/mfd/pm8xxx/vibrator.h>
 
 #define PM8038_CORE_DEV_NAME "pm8038-core"
 
@@ -83,7 +84,10 @@ struct pm8038_platform_data {
 	struct pm8921_bms_platform_data		*bms_pdata;
 	struct pm8xxx_adc_platform_data		*adc_pdata;
 	struct pm8xxx_led_platform_data		*leds_pdata;
-	struct pm8xxx_vibrator_platform_data	*vibrator_pdata;
+#ifdef CONFIG_HUAWEI_KERNEL
+	/* add vibrator device */
+    struct pm8xxx_vibrator_platform_data    *vibrator_pdata;
+#endif
 	struct pm8xxx_ccadc_platform_data	*ccadc_pdata;
 	struct pm8xxx_spk_platform_data		*spk_pdata;
 };

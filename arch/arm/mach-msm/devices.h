@@ -56,7 +56,9 @@ extern struct platform_device msm_device_uart_dm6;
 extern struct platform_device msm_device_uart_dm8;
 extern struct platform_device msm_device_uart_dm9;
 extern struct platform_device mpq8064_device_uartdm_gsbi6;
-
+#ifdef CONFIG_HUAWEI_KERNEL
+extern struct platform_device msm_device_uart_dm11;
+#endif
 extern struct platform_device msm8960_device_uart_gsbi2;
 extern struct platform_device msm8960_device_uart_gsbi5;
 extern struct platform_device msm8960_device_uart_gsbi8;
@@ -108,6 +110,10 @@ extern struct platform_device msm_device_sdc1;
 extern struct platform_device msm_device_sdc2;
 extern struct platform_device msm_device_sdc3;
 extern struct platform_device msm_device_sdc4;
+
+extern struct platform_device msm8960_pc_cntr;
+extern struct platform_device msm8064_pc_cntr;
+extern struct platform_device msm8930_pc_cntr;
 
 extern struct platform_device msm_device_gadget_peripheral;
 extern struct platform_device msm_device_hsusb_host;
@@ -287,6 +293,8 @@ extern struct platform_device apq_cpudai_slimbus_3_rx;
 extern struct platform_device apq_cpudai_slimbus_3_tx;
 extern struct platform_device apq_cpudai_slim_4_rx;
 extern struct platform_device apq_cpudai_slim_4_tx;
+/* Merge MI2S patch */
+extern struct platform_device msm_cpudai_mi2s;
 
 extern struct platform_device *msm_footswitch_devices[];
 extern unsigned msm_num_footswitch_devices;

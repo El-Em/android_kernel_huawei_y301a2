@@ -20,6 +20,13 @@
 #include <linux/mfd/pm8xxx/core.h>
 #include <linux/mfd/pm8xxx/rtc.h>
 
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+#include <linux/reboot.h>
+#include <linux/syscalls.h>
+#include <linux/workqueue.h>
+#include <linux/init.h>
+#include <linux/string.h>
+#endif
 
 /* RTC Register offsets from RTC CTRL REG */
 #define PM8XXX_ALARM_CTRL_OFFSET 0x01
@@ -35,6 +42,10 @@
 #define PM8xxx_RTC_ALARM_CLEAR  BIT(0)
 
 #define NUM_8_BIT_RTC_REGS	0x4
+
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+extern struct rtc_wkalrm poweroff_rtc_alarm;
+#endif
 
 /**
  * struct pm8xxx_rtc - rtc driver internal structure
@@ -357,6 +368,26 @@ static struct rtc_class_ops pm8xxx_rtc_ops = {
 	.alarm_irq_enable = pm8xxx_rtc_alarm_irq_enable,
 };
 
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+/*check wheather it's in power-off charge state*/
+bool is_recoverychg(void)
+{
+	char *p;
+	p = strstr(saved_command_line, "recoverychg");
+	if (p) {
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+static struct work_struct oem_rtc_reboot_queue;
+static void oem_rtc_reboot(struct work_struct *work)
+{
+    sys_sync();
+    kernel_restart("oem-rtc");
+}
+#endif
 static irqreturn_t pm8xxx_alarm_trigger(int irq, void *dev_id)
 {
 	struct pm8xxx_rtc *rtc_dd = dev_id;
@@ -365,6 +396,16 @@ static irqreturn_t pm8xxx_alarm_trigger(int irq, void *dev_id)
 	unsigned long irq_flags;
 
 	rtc_update_irq(rtc_dd->rtc, 1, RTC_IRQF | RTC_AF);
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+	/*
+	* The device is charging in recovery mode;
+	* When the power-off alarm irq is triggered,
+	* the device need to be rebooted
+	*/
+	if(unlikely(is_recoverychg())) {
+		schedule_work(&oem_rtc_reboot_queue);
+	}
+#endif
 
 	spin_lock_irqsave(&rtc_dd->ctrl_reg_lock, irq_flags);
 
@@ -559,10 +600,19 @@ static void pm8xxx_rtc_shutdown(struct platform_device *pdev)
 	struct pm8xxx_rtc *rtc_dd = platform_get_drvdata(pdev);
 	struct pm8xxx_rtc_platform_data *pdata = pdev->dev.platform_data;
 
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+	if(unlikely(is_recoverychg()))
+		return;
+#endif
+
 	if (pdata != NULL)
 		rtc_alarm_powerup =  pdata->rtc_alarm_powerup;
 
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+	if (!rtc_alarm_powerup || !poweroff_rtc_alarm.enabled) {
+#else
 	if (!rtc_alarm_powerup) {
+#endif
 
 		spin_lock_irqsave(&rtc_dd->ctrl_reg_lock, irq_flags);
 		dev_dbg(&pdev->dev, "Disabling alarm interrupts\n");
@@ -584,6 +634,20 @@ static void pm8xxx_rtc_shutdown(struct platform_device *pdev)
 
 fail_alarm_disable:
 		spin_unlock_irqrestore(&rtc_dd->ctrl_reg_lock, irq_flags);
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+	} else if (poweroff_rtc_alarm.enabled) {
+		/* Set poweroff rtc alarm again
+		 * This will clean the rtc irq state
+		 */
+		rc = pm8xxx_rtc_set_alarm(rtc_dd->rtc_dev, &poweroff_rtc_alarm);
+		if (rc < 0) {
+			dev_dbg(&pdev->dev,
+				"Enabling poweroff alarm interrupts FAIL!\n");
+		} else {
+			dev_dbg(&pdev->dev,
+				"Enabling poweroff alarm interrupts SUCCESS\n");
+		}
+#endif
 	}
 }
 
@@ -602,6 +666,9 @@ static struct platform_driver pm8xxx_rtc_driver = {
 
 static int __init pm8xxx_rtc_init(void)
 {
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+	INIT_WORK(&oem_rtc_reboot_queue, oem_rtc_reboot);
+#endif
 	return platform_driver_register(&pm8xxx_rtc_driver);
 }
 module_init(pm8xxx_rtc_init);

@@ -14,6 +14,7 @@
 #define __QCOM_WLAN_SECIF_H__
 
 #include <crypto/hash.h>
+#include <linux/kobject.h>
 
 /*
  * Prototypes for WLAN Security Interface Functions
@@ -29,5 +30,9 @@ extern int wcnss_wlan_crypto_ahash_setkey(struct crypto_ahash *tfm,
 extern struct crypto_ablkcipher *
 wcnss_wlan_crypto_alloc_ablkcipher(const char *alg_name, u32 type, u32 mask);
 extern void wcnss_wlan_ablkcipher_request_free(struct ablkcipher_request *req);
+extern int wcnss_wlan_kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
+		       char *envp_ext[]);
+extern int wcnss_wlan_add_uevent_var(struct kobj_uevent_env *env, const char *format, ...)
+	__attribute__((format (printf, 2, 3)));
 
 #endif /* __QCOM_WLAN_SECIF_H__ */

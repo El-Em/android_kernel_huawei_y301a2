@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -41,6 +41,9 @@ static int vsync_start_y_adjust = 4;
  */
 #define VSYNC_EXPIRE_TICK 4
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+extern void mdp_set_vsync_time_func(void) ; 
+#endif
 static struct vsycn_ctrl {
 	struct device *dev;
 	int inited;
@@ -69,6 +72,7 @@ static struct vsycn_ctrl {
 	struct vsync_update vlist[2];
 	int vsync_enabled;
 	int clk_enabled;
+	int new_update;
 	int clk_control;
 	ktime_t vsync_time;
 	struct work_struct clk_work;
@@ -248,8 +252,70 @@ void mdp4_dsi_cmd_pipe_queue(int cndx, struct mdp4_overlay_pipe *pipe)
 	mdp4_stat.overlay_play[pipe->mixer_num]++;
 }
 
-static void mdp4_dsi_cmd_blt_ov_update(struct mdp4_overlay_pipe *pipe);
+static void mdp4_dsi_cmd_pipe_clean(struct vsync_update *vp)
+{
+	struct mdp4_overlay_pipe *pipe;
+	int i;
 
+	pipe = vp->plist;
+	for (i = 0; i < OVERLAY_PIPE_MAX; i++, pipe++) {
+		if (pipe->pipe_used) {
+			mdp4_overlay_iommu_pipe_free(pipe->pipe_ndx, 0);
+			pipe->pipe_used = 0; /* clear */
+		}
+	}
+	vp->update_cnt = 0;     /* empty queue */
+}
+
+static void mdp4_dsi_cmd_blt_ov_update(struct mdp4_overlay_pipe *pipe);
+#ifdef CONFIG_HW_ESD_DETECT
+/*add qcom patch to solve esd issue*/
+void cmd_wait4dmap(struct msm_fb_data_type *mfd)
+{
+	int need_dmap_wait = 0;
+	int need_ov_wait = 0;
+	struct vsycn_ctrl *vctrl;
+	struct mdp4_overlay_pipe *pipe;
+	unsigned long flags;
+		vctrl = &vsync_ctrl_db[0];
+	pipe = vctrl->base_pipe;
+		mutex_lock(&vctrl->update_lock);
+	spin_lock_irqsave(&vctrl->spin_lock, flags);
+	if (pipe->ov_blt_addr) {
+		/* Blt */
+		if (vctrl->blt_wait)
+			need_dmap_wait = 1;
+		if (vctrl->ov_koff != vctrl->ov_done) {
+		INIT_COMPLETION(vctrl->ov_comp);
+		need_ov_wait = 1;		}
+	} else {
+		/* direct out */
+		if (vctrl->dmap_koff != vctrl->dmap_done) {
+			INIT_COMPLETION(vctrl->dmap_comp);
+			pr_debug("%s: wait, ok=%d od=%d dk=%d dd=%d cpu=%d\n",
+			__func__, vctrl->ov_koff, vctrl->ov_done,
+			vctrl->dmap_koff, vctrl->dmap_done, smp_processor_id());
+			need_dmap_wait = 1;
+		}
+	}
+	spin_unlock_irqrestore(&vctrl->spin_lock, flags);
+	
+	if (need_dmap_wait) {
+		pr_debug("%s: wait4dmap\n", __func__);
+		mdp4_dsi_cmd_wait4dmap(0);
+	}
+	if (need_ov_wait) {
+		pr_debug("%s: wait4ov\n", __func__);
+		mdp4_dsi_cmd_wait4ov(0);
+	}
+	mutex_unlock(&vctrl->update_lock);
+		mipi_dsi_mdp_busy_wait();
+}
+#endif
+/*fix qcom commandlist bug*/
+#ifdef CONFIG_HUAWEI_KERNEL
+extern struct mutex cmd_mutex;
+#endif
 int mdp4_dsi_cmd_pipe_commit(int cndx, int wait)
 {
 	int  i, undx;
@@ -271,11 +337,19 @@ int mdp4_dsi_cmd_pipe_commit(int cndx, int wait)
 	pipe = vctrl->base_pipe;
 	mixer = pipe->mixer_num;
 
+	mdp_update_pm(vctrl->mfd, vctrl->vsync_time);
+
 	if (vp->update_cnt == 0) {
 		mutex_unlock(&vctrl->update_lock);
 		return cnt;
 	}
-
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	if (vctrl->mfd->is_panel_alive == 0) {
+		mutex_unlock(&vctrl->update_lock);
+		return cnt;
+	}
+	#endif
 	vctrl->update_ndx++;
 	vctrl->update_ndx &= 0x01;
 	vp->update_cnt = 0;     /* reset */
@@ -353,8 +427,15 @@ int mdp4_dsi_cmd_pipe_commit(int cndx, int wait)
 	}
 
 	/* tx dcs command if had any */
+	/*fix qcom command list bug*/
+	#ifdef CONFIG_HUAWEI_KERNEL
+	mutex_lock(&cmd_mutex);
+	#endif
 	mipi_dsi_cmdlist_commit(1);
 
+	#ifdef CONFIG_HUAWEI_KERNEL
+	mutex_unlock(&cmd_mutex);
+	#endif
 	mdp4_mixer_stage_commit(mixer);
 
 	pipe = vctrl->base_pipe;
@@ -373,17 +454,14 @@ int mdp4_dsi_cmd_pipe_commit(int cndx, int wait)
 	pr_debug("%s: kickoff, pid=%d\n", __func__, current->pid);
 	/* kickoff overlay engine */
 	mdp4_stat.kickoff_ov0++;
-	outpdw(MDP_BASE + 0x0004, 0);
+	mdp_pipe_kickoff_simplified(MDP_OVERLAY0_TERM);
 	mb(); /* make sure kickoff ececuted */
 	spin_unlock_irqrestore(&vctrl->spin_lock, flags);
 
 	mdp4_stat.overlay_commit[pipe->mixer_num]++;
 
-	if (wait) {
-		long long tick;
-
-		mdp4_dsi_cmd_wait4vsync(cndx, &tick);
-	}
+	if (wait)
+		mdp4_dsi_cmd_wait4vsync(0);
 
 	return cnt;
 }
@@ -392,6 +470,10 @@ static void mdp4_overlay_update_dsi_cmd(struct msm_fb_data_type *mfd);
 
 void mdp4_dsi_cmd_vsync_ctrl(struct fb_info *info, int enable)
 {
+	#ifdef CONFIG_HUAWEI_KERNEL
+	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *) info->par;
+	static int old_imgType = -1;
+	#endif
 	struct vsycn_ctrl *vctrl;
 	unsigned long flags;
 	int cndx = 0;
@@ -420,12 +502,21 @@ void mdp4_dsi_cmd_vsync_ctrl(struct fb_info *info, int enable)
 			mipi_dsi_clk_cfg(1);
 			mdp_clk_ctrl(1);
 			vctrl->clk_enabled = 1;
+			vctrl->new_update = 1;
 			clk_set_on = 1;
 		}
 		if (clk_set_on) {
 			vsync_irq_enable(INTR_PRIMARY_RDPTR,
 						MDP_PRIM_RDPTR_TERM);
 		}
+		/*baseline 1.5 to 1.7 be deleted,we believe it's Qual's bug*/
+		#ifdef CONFIG_HUAWEI_KERNEL
+		if( mfd->fb_imgType != old_imgType)
+		{
+			old_imgType = mfd->fb_imgType;
+			mdp4_overlay_update_dsi_cmd(mfd);
+		}
+		#endif
 	} else {
 		spin_lock_irqsave(&vctrl->spin_lock, flags);
 		vctrl->expire_tick = VSYNC_EXPIRE_TICK;
@@ -434,7 +525,7 @@ void mdp4_dsi_cmd_vsync_ctrl(struct fb_info *info, int enable)
 	mutex_unlock(&vctrl->update_lock);
 }
 
-void mdp4_dsi_cmd_wait4vsync(int cndx, long long *vtime)
+void mdp4_dsi_cmd_wait4vsync(int cndx)
 {
 	struct vsycn_ctrl *vctrl;
 	struct mdp4_overlay_pipe *pipe;
@@ -448,10 +539,8 @@ void mdp4_dsi_cmd_wait4vsync(int cndx, long long *vtime)
 	vctrl = &vsync_ctrl_db[cndx];
 	pipe = vctrl->base_pipe;
 
-	if (atomic_read(&vctrl->suspend) > 0) {
-		*vtime = -1;
+	if (atomic_read(&vctrl->suspend) > 0)
 		return;
-	}
 
 	spin_lock_irqsave(&vctrl->spin_lock, flags);
 	if (vctrl->wait_vsync_cnt == 0)
@@ -463,8 +552,6 @@ void mdp4_dsi_cmd_wait4vsync(int cndx, long long *vtime)
 			&vctrl->vsync_comp, msecs_to_jiffies(100)))
 		pr_err("%s %d  TIMEOUT_\n", __func__, __LINE__);
 	mdp4_stat.wait4vsync0++;
-
-	*vtime = ktime_to_ns(vctrl->vsync_time);
 }
 
 static void mdp4_dsi_cmd_wait4dmap(int cndx)
@@ -520,6 +607,12 @@ static void primary_rdptr_isr(int cndx)
 
 	spin_lock(&vctrl->spin_lock);
 	vctrl->vsync_time = ktime_get();
+
+	if (vctrl->new_update) {
+		vctrl->new_update = 0;
+		spin_unlock(&vctrl->spin_lock);
+		return;
+	}
 
 	complete_all(&vctrl->vsync_comp);
 	vctrl->wait_vsync_cnt = 0;
@@ -687,6 +780,10 @@ ssize_t mdp4_dsi_cmd_show_event(struct device *dev,
 	vsync_tick = ktime_to_ns(vctrl->vsync_time);
 	spin_unlock_irqrestore(&vctrl->spin_lock, flags);
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+	/* we record vsync send event if use MDP4.0 */ 
+	mdp_set_vsync_time_func();
+#endif
 	ret = snprintf(buf, PAGE_SIZE, "VSYNC=%llu", vsync_tick);
 	buf[strlen(buf) + 1] = '\0';
 	return ret;
@@ -825,14 +922,15 @@ static void mdp4_overlay_update_dsi_cmd(struct msm_fb_data_type *mfd)
 	int ret;
 	int cndx = 0;
 	struct vsycn_ctrl *vctrl;
-
-
+	static int old_imgType = -1;
+	
 	if (mfd->key != MFD_KEY)
 		return;
 
 	vctrl = &vsync_ctrl_db[cndx];
-
-	if (vctrl->base_pipe == NULL) {
+	/*when changing image type,open a pipe again*/
+	if ( (vctrl->base_pipe == NULL) || (mfd->fb_imgType != old_imgType)) {
+		old_imgType = mfd->fb_imgType;
 		ptype = mdp4_overlay_format2type(mfd->fb_imgType);
 		if (ptype < 0)
 			printk(KERN_INFO "%s: format2type failed\n", __func__);
@@ -1086,19 +1184,18 @@ int mdp4_dsi_cmd_off(struct platform_device *pdev)
 		 * pipe's iommu will be freed at next overlay play
 		 * and iommu_drop statistic will be increased by one
 		 */
-		vp->update_cnt = 0;     /* empty queue */
+		pr_warn("%s: update_cnt=%d\n", __func__, vp->update_cnt);
+		mdp4_dsi_cmd_pipe_clean(vp);
 	}
 
-	undx =  vctrl->update_ndx;
-	vp = &vctrl->vlist[undx];
-	if (vp->update_cnt) {
-		/*
-		 * pipe's iommu will be freed at next overlay play
-		 * and iommu_drop statistic will be increased by one
-		 */
-		vp->update_cnt = 0;     /* empty queue */
-	}
-
+	#ifdef CONFIG_HW_ESD_DETECT
+	/*add qcom patch to solve esd issue*/
+	/* Make kickoff count equal to done count for keeper thread.
+	* Temp change	 
+	*/	
+	vctrl->dmap_done = vctrl->dmap_koff;	
+	vctrl->ov_done = vctrl->ov_koff;	
+	#endif
 	pr_debug("%s-:\n", __func__);
 	return ret;
 }

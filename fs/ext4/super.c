@@ -50,6 +50,9 @@
 #include "xattr.h"
 #include "acl.h"
 #include "mballoc.h"
+#ifdef CONFIG_EXT4_HUAWEI_READ_ONLY_RECOVERY
+#include <linux/reboot.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/ext4.h>
@@ -483,6 +486,18 @@ static void ext4_handle_error(struct super_block *sb)
 	if (test_opt(sb, ERRORS_PANIC))
 		panic("EXT4-fs (device %s): panic forced after error\n",
 			sb->s_id);
+
+#ifdef CONFIG_EXT4_HUAWEI_READ_ONLY_RECOVERY
+{
+	struct ext4_super_block *es = EXT4_SB(sb)->s_es;
+
+    /* Update error status flag and restart */
+	es->s_state |= cpu_to_le16(EXT4_ERROR_FS);
+    ext4_commit_super(sb, 1);
+    kernel_restart(NULL);
+}
+#endif
+    
 }
 
 void __ext4_error(struct super_block *sb, const char *function,

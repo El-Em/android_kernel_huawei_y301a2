@@ -66,8 +66,18 @@
 #include <linux/usb/gadget.h>
 #include <linux/usb/otg.h>
 #include <linux/usb/msm_hsusb.h>
-
+#include <linux/tracepoint.h>
+#include <mach/usb_trace.h>
 #include "ci13xxx_udc.h"
+
+#ifdef CONFIG_HUAWEI_KERNEL
+#include <linux/wakelock.h>
+#endif
+
+/* transplant the usb solution from 8x25ICS to 8930JB */
+#ifdef CONFIG_HUAWEI_KERNEL
+#include <asm-arm/huawei/usb_switch_huawei.h>
+#endif  /* CONFIG_HUAWEI_KERNEL */
 
 
 /******************************************************************************
@@ -79,6 +89,16 @@
 #define EP_PRIME_CHECK_DELAY	(jiffies + msecs_to_jiffies(1000))
 #define MAX_PRIME_CHECK_RETRY	3 /*Wait for 3sec for EP prime failure */
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#define NON_STANDARD_CHARGER_TIMER_FREQ		(round_jiffies_relative(msecs_to_jiffies(3000)))
+#define NON_STANDARD_REENMU_TIMER_FREQ      (round_jiffies_relative(msecs_to_jiffies(1000)))
+#define ENUM_SUCCESS 1
+#define ENUM_FAIL    0
+#define NON_STANDARD_CHARGER_CURRENT                   500
+static uint g_enum_flag = 0;
+static int repeat_count = 0;
+static void (*notify_otg_state_func_ptr)(int);
+#endif
 /* ctrl register bank access */
 static DEFINE_SPINLOCK(udc_lock);
 
@@ -136,6 +156,21 @@ static int ffs_nr(u32 x)
 	return n ? n-1 : 32;
 }
 
+struct ci13xxx_ebi_err_entry {
+	u32 *usb_req_buf;
+	u32 usb_req_length;
+	u32 ep_info;
+	struct ci13xxx_ebi_err_entry *next;
+};
+
+struct ci13xxx_ebi_err_data {
+	u32 ebi_err_addr;
+	u32 apkt0;
+	u32 apkt1;
+	struct ci13xxx_ebi_err_entry *ebi_err_entry;
+};
+static struct ci13xxx_ebi_err_data *ebi_err_data;
+
 /******************************************************************************
  * HW block
  *****************************************************************************/
@@ -177,6 +212,10 @@ static struct {
 
 /* maximum number of enpoints: valid only after hw_device_reset() */
 static unsigned hw_ep_max;
+/* declare delay work queue*/
+#ifdef CONFIG_HUAWEI_KERNEL
+static void enum_delay_work_func(struct work_struct *work);
+#endif
 static void dbg_usb_op_fail(u8 addr, const char *name,
 				const struct ci13xxx_ep *mep);
 /**
@@ -1039,6 +1078,80 @@ static void dbg_setup(u8 addr, const struct usb_ctrlrequest *req)
 	}
 }
 
+
+/* transplant the usb solution from 8x25ICS to 8930JB */
+#ifdef CONFIG_HUAWEI_KERNEL
+/*
+ * the function for stitching usb mode
+ * @dev: usb gadget device
+ * @attr: the atrribute of device
+ * @buf: the buf is to be written
+ * @size: the size of buf
+ * Return value: @size success, -1 fail
+ * Side effect : none
+ */
+static ssize_t msm_hsusb_store_fixusb(struct device *dev,
+                    struct device_attribute *attr,
+                    const char *buf, size_t size)
+{
+    unsigned long pid_index = 0;
+
+    dev_dbg(dev,"%s, buf=%s\n", __func__, buf);
+    if (!strict_strtoul(buf, 10, &pid_index))
+    {
+        /* factory mode, normal mode, google mode, slate test mode, authentication mode
+         * are supported. Return fail if users want to switch to other mode.
+         */
+        if (pid_index != ORI_INDEX && pid_index != CDROM_INDEX && pid_index != GOOGLE_INDEX
+            && pid_index != SLATE_TEST_INDEX && pid_index != AUTH_INDEX )
+        {
+            dev_err(dev,"%s: pid_index %ld is not supported. So fail to switch to this mode.\n", __func__, pid_index);
+            return -1;
+        }
+
+        if (0 == usb_para_data.usb_para.usb_serial[0] && GOOGLE_INDEX == pid_index)
+        {
+            dev_err(dev,"%s: Usb serial number is null in google mode. So fail to switch to google mode.\n", __func__);
+            return -1;
+        }
+
+        /* update nv_item when user set a pid_index that is differnt from the present nv_item */
+        if(usb_para_data.usb_para.usb_pid_index != pid_index)
+        {
+            /* update usb_para_data.usb_para.usb_pid_index */
+            usb_para_data.usb_para.usb_pid_index = pid_index;
+            dev_dbg(dev,"%s: usb_pid_index updates to : %d \n", __func__, usb_para_data.usb_para.usb_pid_index);
+        }
+        
+         usb_port_switch_request(pid_index);
+    }
+    else
+    {
+        dev_err(dev,"%s: Fixusb conversion failed\n", __func__);
+    }
+    
+    return size;
+}
+
+/*
+ * the function for stitching usb mode
+ * @dev: usb gadget device
+ * @attr: the atrribute of device
+ * @buf: the buf is to be read
+ * Return value: >0 success, 0 fail
+ * Side effect : none
+ */
+static ssize_t msm_hsusb_show_fixusb(struct device *dev,
+                    struct device_attribute *attr,
+                    char *buf)
+{
+        int i;
+        i = scnprintf(buf, PAGE_SIZE, "Fixusb read =%d\n",usb_para_data.usb_para.usb_pid_index);
+        return i;
+}
+static DEVICE_ATTR(fixusb, 0664, msm_hsusb_show_fixusb, msm_hsusb_store_fixusb);
+#endif  /* CONFIG_HUAWEI_KERNEL */
+
 /**
  * dbg_usb_op_fail: prints USB Operation FAIL event
  * @addr: endpoint address
@@ -1215,6 +1328,124 @@ static ssize_t show_inters(struct device *dev, struct device_attribute *attr,
 
 	return n;
 }
+
+#ifdef CONFIG_HUAWEI_KERNEL
+void ci13xxx_udc_set_enum_flag(void)
+{
+    g_enum_flag = 1;
+}
+
+void ci13xxx_udc_clr_enum_flag(void)
+{
+    g_enum_flag = 0;
+}
+
+int ci13xxx_udc_get_enum_count(void)
+{
+    return repeat_count;
+}
+EXPORT_SYMBOL_GPL(ci13xxx_udc_get_enum_count);
+
+
+void ci13xxx_udc_set_enum_count(int count)
+{
+    if(count < 0)
+    {
+         pr_err("%s: The input volue is invalid!\n",__func__);
+         return;
+    }
+    repeat_count = 0;
+}
+EXPORT_SYMBOL_GPL(ci13xxx_udc_set_enum_count);
+
+int ci13xxx_udc_register_vbus_sn(void (*callback)(int))
+{
+    pr_debug("%p\n", callback);
+    notify_otg_state_func_ptr = callback;
+    return 0;
+}
+EXPORT_SYMBOL_GPL(ci13xxx_udc_register_vbus_sn);
+
+/* this is passed to the hsusb via platform_data msm_otg_pdata */
+void ci13xxx_udc_unregister_vbus_sn(void (*callback)(int))
+{
+    pr_debug("%p\n", callback);
+    notify_otg_state_func_ptr = NULL;
+}
+EXPORT_SYMBOL_GPL(ci13xxx_udc_unregister_vbus_sn);
+
+static void notify_otg_of_the_reenum_event(int plugin)
+{
+    plugin = !!plugin;
+    if (notify_otg_state_func_ptr)
+    {
+       pr_debug("notifying otg\n");
+       (*notify_otg_state_func_ptr) (plugin);
+    }
+    else
+    {
+        pr_debug("unable to notify\n");
+    }
+}
+
+extern int is_usb_chg_exist(void);
+
+/* added for non_standard charger  */
+extern void set_nonstand_charger_flag(void);
+
+#define REENUM_NUM 	0
+
+static void enum_delay_work_func(struct work_struct *work)
+{
+
+    struct delayed_work *dwork = to_delayed_work(work);
+    struct ci13xxx *udc = container_of(dwork,struct ci13xxx, enmu_delay_work);
+    struct usb_phy * otg_xciev = udc->transceiver;
+
+    if(g_enum_flag)
+    {
+         repeat_count = 0;
+         ci13xxx_udc_clr_enum_flag();
+         wake_unlock(&udc->non_standard_wake_lock);
+         return;
+    }
+
+    /* charger is non standard charger or slowly plug in AC/usb also run here ,
+      * if we clear enum flag  we should enum again  ,
+      * reenum six times if charger is not AC/usb ,
+      * will set non_standard flag , and set non_standard charger current 500mA */
+    if (repeat_count <= REENUM_NUM)
+    {
+         wake_lock(&udc->non_standard_wake_lock);
+         notify_otg_of_the_reenum_event(0);
+         schedule_delayed_work(&udc->re_enum_delay_work, NON_STANDARD_REENMU_TIMER_FREQ);
+    }
+    else
+    {
+         if(is_usb_chg_exist())
+         {
+              usb_phy_set_power(otg_xciev, NON_STANDARD_CHARGER_CURRENT);
+              set_nonstand_charger_flag();
+         }
+         else
+         {
+              notify_otg_of_the_reenum_event(0);
+         }
+         repeat_count = 0;
+         wake_unlock(&udc->non_standard_wake_lock);
+    }
+}
+
+static void re_enum_delay_work_func(struct work_struct *work)
+{
+    struct delayed_work *dwork = to_delayed_work(work);
+    struct ci13xxx *udc = container_of(dwork,struct ci13xxx, re_enum_delay_work);
+    /* delete USB charger judgement, if charger is USB already, return in enum_delay_work_func */
+    notify_otg_of_the_reenum_event(1);
+    repeat_count++;
+    wake_unlock(&udc->non_standard_wake_lock);
+}
+#endif
 
 /**
  * store_inters: enable & force or disable an individual interrutps
@@ -1724,6 +1955,72 @@ __maybe_unused static int dbg_remove_files(struct device *dev)
 	return 0;
 }
 
+static void dump_usb_info(void *ignore, unsigned int ebi_addr,
+	unsigned int ebi_apacket0, unsigned int ebi_apacket1)
+{
+	struct ci13xxx *udc = _udc;
+	unsigned long flags;
+	struct list_head   *ptr = NULL;
+	struct ci13xxx_req *req = NULL;
+	struct ci13xxx_ep *mEp;
+	unsigned i;
+	struct ci13xxx_ebi_err_entry *temp_dump;
+	static int count;
+	u32 epdir = 0;
+
+	if (count)
+		return;
+	count++;
+
+	pr_info("%s: USB EBI error detected\n", __func__);
+
+	ebi_err_data = kmalloc(sizeof(struct ci13xxx_ebi_err_data),
+				 GFP_ATOMIC);
+	if (!ebi_err_data) {
+		pr_err("%s: memory alloc failed for ebi_err_data\n", __func__);
+		return;
+	}
+
+	ebi_err_data->ebi_err_entry = kmalloc(
+					sizeof(struct ci13xxx_ebi_err_entry),
+					GFP_ATOMIC);
+	if (!ebi_err_data->ebi_err_entry) {
+		kfree(ebi_err_data);
+		pr_err("%s: memory alloc failed for ebi_err_entry\n", __func__);
+		return;
+	}
+
+	ebi_err_data->ebi_err_addr = ebi_addr;
+	ebi_err_data->apkt0 = ebi_apacket0;
+	ebi_err_data->apkt1 = ebi_apacket1;
+
+	temp_dump = ebi_err_data->ebi_err_entry;
+	pr_info("\n DUMPING USB Requests Information\n");
+	spin_lock_irqsave(udc->lock, flags);
+	for (i = 0; i < hw_ep_max; i++) {
+		list_for_each(ptr, &udc->ci13xxx_ep[i].qh.queue) {
+			mEp = &udc->ci13xxx_ep[i];
+			req = list_entry(ptr, struct ci13xxx_req, queue);
+
+			temp_dump->usb_req_buf = req->req.buf;
+			temp_dump->usb_req_length = req->req.length;
+			epdir = mEp->dir;
+			temp_dump->ep_info = mEp->num | (epdir << 15);
+
+			temp_dump->next = kmalloc(
+					  sizeof(struct ci13xxx_ebi_err_entry),
+					  GFP_ATOMIC);
+			if (!temp_dump->next) {
+				pr_err("%s: memory alloc failed\n", __func__);
+				spin_unlock_irqrestore(udc->lock, flags);
+				return;
+			}
+			temp_dump = temp_dump->next;
+		}
+	}
+	spin_unlock_irqrestore(udc->lock, flags);
+}
+
 /******************************************************************************
  * UTIL block
  *****************************************************************************/
@@ -2011,7 +2308,18 @@ static int _hardware_dequeue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
 	if (mReq->zptr) {
 		if ((TD_STATUS_ACTIVE & mReq->zptr->token) != 0)
 			return -EBUSY;
-		dma_pool_free(mEp->td_pool, mReq->zptr, mReq->zdma);
+
+		/* The controller may access this dTD one more time.
+		 * Defer freeing this to next zero length dTD completion.
+		 * It is safe to assume that controller will no longer
+		 * access the previous dTD after next dTD completion.
+		 */
+		if (mEp->last_zptr)
+			dma_pool_free(mEp->td_pool, mEp->last_zptr,
+					mEp->last_zdma);
+		mEp->last_zptr = mReq->zptr;
+		mEp->last_zdma = mReq->zdma;
+
 		mReq->zptr = NULL;
 	}
 
@@ -2139,9 +2447,10 @@ static int _gadget_stop_activity(struct usb_gadget *gadget)
 	usb_ep_fifo_flush(&udc->ep0out.ep);
 	usb_ep_fifo_flush(&udc->ep0in.ep);
 
-	if (udc->status != NULL) {
-		usb_ep_free_request(&udc->ep0in.ep, udc->status);
-		udc->status = NULL;
+	if (udc->ep0in.last_zptr) {
+		dma_pool_free(udc->ep0in.td_pool, udc->ep0in.last_zptr,
+				udc->ep0in.last_zdma);
+		udc->ep0in.last_zptr = NULL;
 	}
 
 	return 0;
@@ -2185,7 +2494,7 @@ __acquires(udc->lock)
 
 	/*stop charging upon reset */
 	if (udc->transceiver)
-		usb_phy_set_power(udc->transceiver, 0);
+		usb_phy_set_power(udc->transceiver, 100);
 
 	retval = _gadget_stop_activity(&udc->gadget);
 	if (retval)
@@ -2194,10 +2503,6 @@ __acquires(udc->lock)
 	retval = hw_usb_reset();
 	if (retval)
 		goto done;
-
-	udc->status = usb_ep_alloc_request(&udc->ep0in.ep, GFP_ATOMIC);
-	if (udc->status == NULL)
-		retval = -ENOMEM;
 
 	spin_lock(udc->lock);
 
@@ -2267,8 +2572,8 @@ static void isr_get_status_complete(struct usb_ep *ep, struct usb_request *req)
 		return;
 	}
 
-	kfree(req->buf);
-	usb_ep_free_request(ep, req);
+	if (req->status)
+		err("GET_STATUS failed");
 }
 
 /**
@@ -2284,8 +2589,7 @@ __releases(mEp->lock)
 __acquires(mEp->lock)
 {
 	struct ci13xxx_ep *mEp = &udc->ep0in;
-	struct usb_request *req = NULL;
-	gfp_t gfp_flags = GFP_ATOMIC;
+	struct usb_request *req = udc->status;
 	int dir, num, retval;
 
 	trace("%p, %p", mEp, setup);
@@ -2293,19 +2597,9 @@ __acquires(mEp->lock)
 	if (mEp == NULL || setup == NULL)
 		return -EINVAL;
 
-	spin_unlock(mEp->lock);
-	req = usb_ep_alloc_request(&mEp->ep, gfp_flags);
-	spin_lock(mEp->lock);
-	if (req == NULL)
-		return -ENOMEM;
-
 	req->complete = isr_get_status_complete;
 	req->length   = 2;
-	req->buf      = kzalloc(req->length, gfp_flags);
-	if (req->buf == NULL) {
-		retval = -ENOMEM;
-		goto err_free_req;
-	}
+	req->buf      = udc->status_buf;
 
 	if ((setup->bRequestType & USB_RECIP_MASK) == USB_RECIP_DEVICE) {
 		if (setup->wIndex == OTG_STATUS_SELECTOR) {
@@ -2328,18 +2622,7 @@ __acquires(mEp->lock)
 	/* else do nothing; reserved for future use */
 
 	spin_unlock(mEp->lock);
-	retval = usb_ep_queue(&mEp->ep, req, gfp_flags);
-	spin_lock(mEp->lock);
-	if (retval)
-		goto err_free_buf;
-
-	return 0;
-
- err_free_buf:
-	kfree(req->buf);
- err_free_req:
-	spin_unlock(mEp->lock);
-	usb_ep_free_request(&mEp->ep, req);
+	retval = usb_ep_queue(&mEp->ep, req, GFP_ATOMIC);
 	spin_lock(mEp->lock);
 	return retval;
 }
@@ -2382,11 +2665,9 @@ __acquires(mEp->lock)
 	trace("%p", udc);
 
 	mEp = (udc->ep0_dir == TX) ? &udc->ep0out : &udc->ep0in;
-	if (udc->status) {
-		udc->status->context = udc;
-		udc->status->complete = isr_setup_status_complete;
-	} else
-		return -EINVAL;
+	udc->status->context = udc;
+	udc->status->complete = isr_setup_status_complete;
+	udc->status->length = 0;
 
 	spin_unlock(mEp->lock);
 	retval = usb_ep_queue(&mEp->ep, udc->status, GFP_ATOMIC);
@@ -2783,6 +3064,12 @@ static int ep_disable(struct usb_ep *ep)
 
 	} while (mEp->dir != direction);
 
+	if (mEp->last_zptr) {
+		dma_pool_free(mEp->td_pool, mEp->last_zptr,
+				mEp->last_zdma);
+		mEp->last_zptr = NULL;
+	}
+
 	mEp->desc = NULL;
 	mEp->ep.desc = NULL;
 	mEp->ep.maxpacket = USHRT_MAX;
@@ -3134,6 +3421,10 @@ static int ci13xxx_vbus_session(struct usb_gadget *_gadget, int is_active)
 			hw_device_reset(udc);
 			if (udc->softconnect)
 				hw_device_state(udc->ep0out.qh.dma);
+#ifdef CONFIG_HUAWEI_KERNEL
+			ci13xxx_udc_clr_enum_flag();
+			schedule_delayed_work(&udc->enmu_delay_work,NON_STANDARD_CHARGER_TIMER_FREQ);
+#endif
 		} else {
 			hw_device_state(0);
 			_gadget_stop_activity(&udc->gadget);
@@ -3297,6 +3588,14 @@ static int ci13xxx_start(struct usb_gadget_driver *driver,
 	retval = usb_ep_enable(&udc->ep0in.ep);
 	if (retval)
 		return retval;
+	udc->status = usb_ep_alloc_request(&udc->ep0in.ep, GFP_KERNEL);
+	if (!udc->status)
+		return -ENOMEM;
+	udc->status_buf = kzalloc(2, GFP_KERNEL); /* for GET_STATUS */
+	if (!udc->status_buf) {
+		usb_ep_free_request(&udc->ep0in.ep, udc->status);
+		return -ENOMEM;
+	}
 	spin_lock_irqsave(udc->lock, flags);
 
 	udc->gadget.ep0 = &udc->ep0in.ep;
@@ -3374,6 +3673,9 @@ static int ci13xxx_stop(struct usb_gadget_driver *driver)
 	spin_unlock_irqrestore(udc->lock, flags);
 	driver->unbind(&udc->gadget);               /* MAY SLEEP */
 	spin_lock_irqsave(udc->lock, flags);
+
+	usb_ep_free_request(&udc->ep0in.ep, udc->status);
+	kfree(udc->status_buf);
 
 	udc->gadget.dev.driver = NULL;
 
@@ -3454,6 +3756,9 @@ static irqreturn_t udc_irq(void)
 		if (USBi_UEI & intr)
 			isr_statistics.uei++;
 		if (USBi_UI  & intr) {
+#ifdef CONFIG_HUAWEI_KERNEL
+			ci13xxx_udc_set_enum_flag();
+#endif
 			isr_statistics.ui++;
 			isr_tr_complete_handler(udc);
 		}
@@ -3590,8 +3895,29 @@ static int udc_probe(struct ci13xxx_udc_driver *driver, struct device *dev,
 
 	pm_runtime_no_callbacks(&udc->gadget.dev);
 	pm_runtime_enable(&udc->gadget.dev);
+#ifdef CONFIG_HUAWEI_KERNEL
+	INIT_DELAYED_WORK(&udc->enmu_delay_work,
+							enum_delay_work_func);
+	INIT_DELAYED_WORK(&udc->re_enum_delay_work,
+					re_enum_delay_work_func);
+	wake_lock_init(&udc->non_standard_wake_lock, WAKE_LOCK_SUSPEND, "non_standard_charger");
+#endif 
+
+	retval = register_trace_usb_daytona_invalid_access(dump_usb_info,
+								NULL);
+	if (retval)
+		pr_err("Registering trace failed\n");
 
 	_udc = udc;
+
+#ifdef CONFIG_HUAWEI_KERNEL
+    retval = device_create_file(&udc->gadget.dev, &dev_attr_fixusb);
+    if (retval != 0)
+        dev_err(&udc->gadget.dev,
+            "failed to create sysfs entry(fixusb):"
+            "err:(%d)\n", retval);
+#endif  /* CONFIG_HUAWEI_KERNEL */
+
 	return retval;
 
 remove_trans:
@@ -3624,11 +3950,22 @@ free_udc:
 static void udc_remove(void)
 {
 	struct ci13xxx *udc = _udc;
+	int retval;
 
 	if (udc == NULL) {
 		err("EINVAL");
 		return;
 	}
+
+#ifdef CONFIG_HUAWEI_KERNEL
+    device_remove_file(&udc->gadget.dev, &dev_attr_fixusb);
+#endif  /* CONFIG_HUAWEI_KERNEL */
+
+	retval = unregister_trace_usb_daytona_invalid_access(dump_usb_info,
+									NULL);
+	if (retval)
+		pr_err("Unregistering trace failed\n");
+
 	usb_del_gadget_udc(&udc->gadget);
 
 	if (udc->transceiver) {

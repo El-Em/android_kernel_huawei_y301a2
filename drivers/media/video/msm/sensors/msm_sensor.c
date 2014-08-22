@@ -16,7 +16,9 @@
 #include "msm.h"
 #include "msm_ispif.h"
 #include "msm_camera_i2c_mux.h"
-
+#ifdef CONFIG_HUAWEI_HW_DEV_DCT
+#include <linux/hw_dev_dec.h>
+#endif
 /*=============================================================*/
 void msm_sensor_adjust_frame_lines1(struct msm_sensor_ctrl_t *s_ctrl)
 {
@@ -279,24 +281,35 @@ int32_t msm_sensor_setting1(struct msm_sensor_ctrl_t *s_ctrl,
 	}
 	return rc;
 }
-
 int32_t msm_sensor_setting(struct msm_sensor_ctrl_t *s_ctrl,
 			int update_type, int res)
 {
 	int32_t rc = 0;
 
 	if (update_type == MSM_SENSOR_REG_INIT) {
-		s_ctrl->func_tbl->sensor_stop_stream(s_ctrl);
-		msm_sensor_write_init_settings(s_ctrl);
+	s_ctrl->func_tbl->sensor_stop_stream(s_ctrl);
+		/*uesd to write special initialization arrays of some sensors*/
+		if(s_ctrl->func_tbl->sensor_write_init_settings)
+		{
+			s_ctrl->func_tbl->sensor_write_init_settings(s_ctrl);
+		}
+		else
+		{
+			msm_sensor_write_init_settings(s_ctrl);
+		}
+
 	} else if (update_type == MSM_SENSOR_UPDATE_PERIODIC) {
 		msm_sensor_write_res_settings(s_ctrl, res);
+		msleep(20);
 		v4l2_subdev_notify(&s_ctrl->sensor_v4l2_subdev,
 			NOTIFY_PCLK_CHANGE, &s_ctrl->msm_sensor_reg->
 			output_settings[res].op_pixel_clk);
+		
+		s_ctrl->func_tbl->sensor_start_stream(s_ctrl);
+		msleep(10);
 	}
 	return rc;
 }
-
 int32_t msm_sensor_set_sensor_mode(struct msm_sensor_ctrl_t *s_ctrl,
 	int mode, int res)
 {
@@ -310,6 +323,7 @@ int32_t msm_sensor_set_sensor_mode(struct msm_sensor_ctrl_t *s_ctrl,
 			s_ctrl->msm_sensor_reg->
 			output_settings[res].line_length_pclk;
 
+	/*use qcom code now*/
 		if (s_ctrl->is_csic ||
 			!s_ctrl->sensordata->csi_if)
 			rc = s_ctrl->func_tbl->sensor_csi_setting(s_ctrl,
@@ -321,7 +335,6 @@ int32_t msm_sensor_set_sensor_mode(struct msm_sensor_ctrl_t *s_ctrl,
 			return rc;
 		s_ctrl->curr_res = res;
 	}
-
 	return rc;
 }
 
@@ -333,6 +346,7 @@ int32_t msm_sensor_mode_init(struct msm_sensor_ctrl_t *s_ctrl,
 	s_ctrl->cam_mode = MSM_SENSOR_MODE_INVALID;
 
 	CDBG("%s: %d\n", __func__, __LINE__);
+	/*use qcom code now*/
 	if (mode != s_ctrl->cam_mode) {
 		s_ctrl->curr_res = MSM_SENSOR_INVALID_RES;
 		s_ctrl->cam_mode = mode;
@@ -479,9 +493,29 @@ int32_t msm_sensor_config(struct msm_sensor_ctrl_t *s_ctrl, void __user *argp)
 					cdata.rs);
 			break;
 
+		/*add handle switch for wb and effect for yuv sensor*/
 		case CFG_SET_EFFECT:
+			if (s_ctrl->func_tbl->
+			sensor_set_effect == NULL) {
+				rc = -EFAULT;
+				break;
+			}
+			rc = s_ctrl->func_tbl->
+				sensor_set_effect(
+				s_ctrl,
+				cdata.cfg.effect);
 			break;
-
+		case CFG_SET_WB:
+			if (s_ctrl->func_tbl->
+			sensor_set_wb == NULL) {
+				rc = -EFAULT;
+				break;
+			}
+			rc = s_ctrl->func_tbl->
+				sensor_set_wb(
+				s_ctrl,
+				cdata.cfg.wb_val);
+			break;
 		case CFG_SENSOR_INIT:
 			if (s_ctrl->func_tbl->
 			sensor_mode_init == NULL) {
@@ -1464,7 +1498,28 @@ int32_t msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 		pr_err("%s: request gpio failed\n", __func__);
 		goto request_gpio_failed;
 	}
-
+	if(data->en_clk_first){
+			if (s_ctrl->sensor_device_type == MSM_SENSOR_I2C_DEVICE) {
+				if (s_ctrl->clk_rate != 0)
+					cam_8960_clk_info->clk_rate = s_ctrl->clk_rate;
+				rc = msm_cam_clk_enable(dev, cam_8960_clk_info,
+					s_ctrl->cam_clk, ARRAY_SIZE(cam_8960_clk_info), 1);
+				if (rc < 0) {
+					pr_err("%s: clk enable failed\n", __func__);
+					goto enable_clk_failed;
+					}
+				} else {
+				rc = msm_cam_clk_enable(dev, cam_8974_clk_info,
+					s_ctrl->cam_clk, ARRAY_SIZE(cam_8974_clk_info), 1);
+				if (rc < 0) {
+					pr_err("%s: clk enable failed\n", __func__);
+					goto enable_clk_failed;
+					}
+				}				
+				usleep_range(100*1000, 105*1000);
+			}
+	if(!data->standby_is_supported || !data->standby_mode   )
+	{	
 	rc = msm_camera_config_vreg(dev,
 		s_ctrl->sensordata->sensor_platform_info->cam_vreg,
 		s_ctrl->sensordata->sensor_platform_info->num_vreg,
@@ -1485,6 +1540,7 @@ int32_t msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 	if (rc < 0) {
 		pr_err("%s: enable regulator failed\n", __func__);
 		goto enable_vreg_failed;
+		}
 	}
 
 	rc = msm_camera_config_gpio_table(data, 1);
@@ -1492,6 +1548,7 @@ int32_t msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 		pr_err("%s: config gpio failed\n", __func__);
 		goto config_gpio_failed;
 	}
+	if(!data->en_clk_first){
 
 	if (s_ctrl->sensor_device_type == MSM_SENSOR_I2C_DEVICE) {
 		if (s_ctrl->clk_rate != 0)
@@ -1511,15 +1568,14 @@ int32_t msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 			goto enable_clk_failed;
 		}
 	}
-
+	}
 	if (!s_ctrl->power_seq_delay)
-		usleep_range(1000, 2000);
+		usleep_range(3000, 4000);/*delay between rst and i2c */
 	else if (s_ctrl->power_seq_delay < 20)
 		usleep_range((s_ctrl->power_seq_delay * 1000),
 			((s_ctrl->power_seq_delay * 1000) + 1000));
 	else
 		msleep(s_ctrl->power_seq_delay);
-
 	if (data->sensor_platform_info->ext_power_ctrl != NULL)
 		data->sensor_platform_info->ext_power_ctrl(1);
 
@@ -1587,13 +1643,15 @@ int32_t msm_sensor_power_down(struct msm_sensor_ctrl_t *s_ctrl)
 
 	if (data->sensor_platform_info->ext_power_ctrl != NULL)
 		data->sensor_platform_info->ext_power_ctrl(0);
+	/* move the mclk disable backward */
+	msm_camera_config_gpio_table(data, 0);
 	if (s_ctrl->sensor_device_type == MSM_SENSOR_I2C_DEVICE)
 		msm_cam_clk_enable(dev, cam_8960_clk_info, s_ctrl->cam_clk,
 			ARRAY_SIZE(cam_8960_clk_info), 0);
 	else
 		msm_cam_clk_enable(dev, cam_8974_clk_info, s_ctrl->cam_clk,
-			ARRAY_SIZE(cam_8974_clk_info), 0);
-	msm_camera_config_gpio_table(data, 0);
+			ARRAY_SIZE(cam_8974_clk_info), 0);	
+	if(!data->standby_is_supported || !data->standby_mode) {
 	msm_camera_enable_vreg(dev,
 		s_ctrl->sensordata->sensor_platform_info->cam_vreg,
 		s_ctrl->sensordata->sensor_platform_info->num_vreg,
@@ -1606,9 +1664,11 @@ int32_t msm_sensor_power_down(struct msm_sensor_ctrl_t *s_ctrl)
 		s_ctrl->vreg_seq,
 		s_ctrl->num_vreg_seq,
 		s_ctrl->reg_ptr, 0);
+		}
 	msm_camera_request_gpio_table(data, 0);
 	kfree(s_ctrl->reg_ptr);
 	s_ctrl->curr_res = MSM_SENSOR_INVALID_RES;
+	usleep_range(1000*15, 1000*20);
 	return 0;
 }
 
@@ -1634,12 +1694,46 @@ int32_t msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 	}
 	return rc;
 }
+typedef    int  (* p_sensor_post_init_func)(void *);
+struct post_func_lists {
+	struct list_head list;
+	p_sensor_post_init_func sensor_post_init_func;
+};
+
+static LIST_HEAD(post_func_map_list);
+
+int sensor_post_init_thread(void * data)
+{
+	struct post_func_lists *node ,*n;
+	list_for_each_entry_safe(node, n, &post_func_map_list, list) {
+		list_del(&node->list);
+		if(node->sensor_post_init_func)
+			node->sensor_post_init_func(NULL);		
+		kfree(node);
+		}
+	do_exit(0);
+}
 
 int32_t msm_sensor_i2c_probe(struct i2c_client *client,
 	const struct i2c_device_id *id)
 {
 	int rc = 0;
+	struct post_func_lists * node ;
 	struct msm_sensor_ctrl_t *s_ctrl;
+
+#ifdef CONFIG_MSM_CAMERA
+	static int camera_node_succee[MSM_MAX_CAMERA_SENSORS] = {0,0,0,0,0};
+	struct msm_camera_sensor_info *sdata = client->dev.platform_data;
+		
+	/*if we have probed one camera at the same position successfully,just return*/
+	if (camera_node_succee[sdata->camera_type])
+	{
+		printk("%s: camera sensor at same postion has existed, %s return!\n",
+				__func__, client->name);
+		return -1;
+	}
+#endif
+
 	CDBG("%s %s_i2c_probe called\n", __func__, client->name);
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
 		pr_err("%s %s i2c_check_functionality failed\n",
@@ -1680,11 +1774,27 @@ int32_t msm_sensor_i2c_probe(struct i2c_client *client,
 		rc = msm_sensor_match_id(s_ctrl);
 	if (rc < 0)
 		goto probe_fail;
-
 	if (!s_ctrl->wait_num_frames)
 		s_ctrl->wait_num_frames = 1 * Q10;
-
-	pr_err("%s %s probe succeeded\n", __func__, client->name);
+	
+	if(s_ctrl->func_tbl->sensor_post_init_func){
+		node = kzalloc(sizeof(struct post_func_lists), GFP_KERNEL);
+		node->sensor_post_init_func=s_ctrl->func_tbl->sensor_post_init_func;
+		list_add_tail(&node->list, &post_func_map_list);
+		}
+		else {
+		if(s_ctrl->sensordata->standby_is_supported){
+			if(s_ctrl->func_tbl->sensor_write_init_settings){
+				s_ctrl->func_tbl->sensor_write_init_settings(s_ctrl);
+			}else{
+			msm_sensor_write_init_settings(s_ctrl);
+			}	
+			s_ctrl->sensordata->standby_mode = 1;
+			}
+		if(s_ctrl->func_tbl->sensor_match_module)
+			s_ctrl->func_tbl->sensor_match_module(s_ctrl);
+				printk("%s %s probe OK\n", s_ctrl->sensordata->sensor_name,s_ctrl->sensor_name);
+		}
 	snprintf(s_ctrl->sensor_v4l2_subdev.name,
 		sizeof(s_ctrl->sensor_v4l2_subdev.name), "%s", id->name);
 	v4l2_i2c_subdev_init(&s_ctrl->sensor_v4l2_subdev, client,
@@ -1698,6 +1808,30 @@ int32_t msm_sensor_i2c_probe(struct i2c_client *client,
 	msm_sensor_register(&s_ctrl->sensor_v4l2_subdev);
 	s_ctrl->sensor_v4l2_subdev.entity.revision =
 		s_ctrl->sensor_v4l2_subdev.devnode->num;
+	camera_node_succee[s_ctrl->sensordata->camera_type] = 1;
+#ifdef CONFIG_HUAWEI_HW_DEV_DCT
+	/* detect current device successful, set the flag as present */
+	switch(s_ctrl->sensordata->camera_type)
+	{
+		case BACK_CAMERA_2D:
+		case BACK_CAMERA_3D:
+		case BACK_CAMERA_INT_3D:
+			set_hw_dev_flag(DEV_I2C_CAMERA_MAIN);
+			printk("%s: %s set_hw_dev_flag success!! \n",__func__,id->name);
+			break;
+		case FRONT_CAMERA_2D:
+			set_hw_dev_flag(DEV_I2C_CAMERA_SLAVE);
+			printk("%s: %s set_hw_dev_flag success!! \n",__func__,id->name);
+			break;
+		default:
+			printk("%s: %s set_hw_dev_flag fail!! \n",__func__,id->name);
+			break;
+	}
+#endif
+	/*****************************************************
+	*	set module match before msm_sensor_register
+	*	it is necessary if we want to mend msm_camera_sensor_info
+	*****************************************************/
 	goto power_down;
 probe_fail:
 	pr_err("%s %s_i2c_probe failed\n", __func__, client->name);

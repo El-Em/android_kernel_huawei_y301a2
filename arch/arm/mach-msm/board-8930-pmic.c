@@ -21,6 +21,7 @@
 #include <mach/socinfo.h>
 #include "devices.h"
 #include "board-8930.h"
+#include <hsad/config_interface.h>
 
 struct pm8xxx_gpio_init {
 	unsigned			gpio;
@@ -48,6 +49,19 @@ struct pm8xxx_mpp_init {
 		.disable_pin	= _disable, \
 	} \
 }
+
+#define PM8038_GPIO_INIT_COPY(_var, _gpio, _dir, _buf, _val, _pull, _vin, _out_strength, \
+			_func, _inv, _disable) \
+	_var.gpio	= PM8038_GPIO_PM_TO_SYS(_gpio); \
+	_var.config.direction	= _dir; \
+	_var.config.output_buffer	= _buf; \
+	_var.config.output_value	= _val; \
+	_var.config.pull		= _pull; \
+	_var.config.vin_sel	= _vin; \
+	_var.config.out_strength	= _out_strength; \
+	_var.config.function	= _func; \
+	_var.config.inv_int_pol	= _inv; \
+	_var.config.disable_pin	= _disable;
 
 #define PM8038_MPP_INIT(_mpp, _type, _level, _control) \
 { \
@@ -83,6 +97,18 @@ struct pm8xxx_mpp_init {
 
 #define PM8038_GPIO_OUTPUT_VIN(_gpio, _val, _vin) \
 	PM8038_GPIO_INIT(_gpio, PM_GPIO_DIR_OUT, PM_GPIO_OUT_BUF_CMOS, _val, \
+			PM_GPIO_PULL_NO, _vin, \
+			PM_GPIO_STRENGTH_HIGH, \
+			PM_GPIO_FUNC_NORMAL, 0, 0)
+
+#define PM8038_GPIO_INPUT_COPY(_var, _gpio, _pull) \
+	PM8038_GPIO_INIT_COPY(_var, _gpio, PM_GPIO_DIR_IN, PM_GPIO_OUT_BUF_CMOS, 0, \
+			_pull, PM8038_GPIO_VIN_L11, \
+			PM_GPIO_STRENGTH_NO, \
+			PM_GPIO_FUNC_NORMAL, 0, 0)
+
+#define PM8038_GPIO_OUTPUT_VIN_COPY(_var, _gpio, _val, _vin) \
+	PM8038_GPIO_INIT_COPY(_var, _gpio, PM_GPIO_DIR_OUT, PM_GPIO_OUT_BUF_CMOS, _val, \
 			PM_GPIO_PULL_NO, _vin, \
 			PM_GPIO_STRENGTH_HIGH, \
 			PM_GPIO_FUNC_NORMAL, 0, 0)
@@ -151,14 +177,39 @@ static struct pm8xxx_gpio_init pm8038_gpios[] __initdata = {
 	PM8038_GPIO_INPUT(8, PM_GPIO_PULL_UP_30),
 	PM8038_GPIO_INPUT(10, PM_GPIO_PULL_UP_30),
 	PM8038_GPIO_INPUT(11, PM_GPIO_PULL_UP_30),
+#ifdef CONFIG_HUAWEI_KERNEL
+    /* set gpio7 to input mode to work as volume- */
+	/* haptics gpio */
+    PM8038_GPIO_INPUT(7, PM_GPIO_PULL_UP_30),
+#else
 	/* haptics gpio */
 	PM8038_GPIO_OUTPUT_FUNC(7, 0, PM_GPIO_FUNC_1),
+#endif
+#ifdef CONFIG_HUAWEI_KERNEL
+	PM8038_GPIO_OUTPUT_VIN(1, 0, PM8038_GPIO_VIN_VPH),
+	PM8038_GPIO_OUTPUT_VIN(2, 0, PM8038_GPIO_VIN_VPH),
+	PM8038_GPIO_OUTPUT_VIN(5, 0, PM8038_GPIO_VIN_VPH),
+	PM8038_GPIO_OUTPUT_VIN(6, 0, PM8038_GPIO_VIN_VPH),
+	/* config GPIO8 of PMIC as sleep clock of BCM4330 */
+	PM8038_GPIO_OUTPUT_FUNC(8, 0, PM8038_GPIO_VIN_VPH),
+	PM8038_GPIO_OUTPUT_VIN(9, 0, PM8038_GPIO_VIN_VPH),
+	/*config GPIO12 for VSP, VSN power source*/
+	PM8038_GPIO_OUTPUT_FUNC(12, 1, PM_GPIO_FUNC_NORMAL),
+#else
 	/* MHL PWR EN */
 	PM8038_GPIO_OUTPUT_VIN(5, 1, PM8038_GPIO_VIN_VPH),
+#endif	
 };
+/* BCM4330 sleep clock config */
+#ifdef CONFIG_HUAWEI_KERNEL
+static struct pm8xxx_gpio_init pm8038_gpios_hw[] __initdata = {
+	PM8038_GPIO_OUTPUT_FUNC(8, 0, PM_GPIO_FUNC_1),
+};
+#endif
 
 /* Initial PM8038 MPP configurations */
 static struct pm8xxx_mpp_init pm8038_mpps[] __initdata = {
+    PM8038_MPP_INIT(6, D_INPUT, 0, DIN_TO_DBUS1),
 };
 
 /* GPIO and MPP configurations for MSM8930 + PM8917 targets */
@@ -184,11 +235,99 @@ static struct pm8xxx_mpp_init pm8917_mpps[] __initdata = {
 	PM8917_MPP_INIT(1, D_INPUT, PM8921_MPP_DIG_LEVEL_S4, DIN_TO_INT),
 };
 
+#ifdef CONFIG_HUAWEI_GPIO_UNITE
+static struct pm8xxx_gpio_init hw_pm8038_gpios[PM8038_GPIO_NUM];
+static int hw_pm8038_gpio_init(void)
+{
+	int i;
+	int rc;
+	int config_index = 0;
+	struct pm_gpio_cfg_t* pPMGpioCfg = get_pm_gpio_config_table();	
+
+	if(NULL == pPMGpioCfg)
+	{
+		pr_err(KERN_ERR "get pm gpio config table failed \n"); 
+		return -EFAULT;
+	}
+
+	for(i = 0; i < PM8038_GPIO_NUM; i++)
+	{	
+		if(pPMGpioCfg[i].cfg.direction != NOSET)
+		{
+			hw_pm8038_gpios[config_index].gpio =  pPMGpioCfg[i].gpio_number;
+			hw_pm8038_gpios[config_index].config = pPMGpioCfg[i].cfg;
+
+			rc = pm8xxx_gpio_config(PM8038_GPIO_PM_TO_SYS(hw_pm8038_gpios[config_index].gpio),  \
+				&hw_pm8038_gpios[config_index].config);
+			if (rc) 
+			{
+				pr_err("%s: pm8xxx_gpio_config: rc=%d\n", __func__, rc);
+				break;
+			}
+
+			config_index++;
+		}
+	}	
+	return 0;
+}
+#endif
+#ifdef CONFIG_HUAWEI_KERNEL
+static void __init hw_msm8930_gpio_init(void)
+{
+	int i = 0;
+	int rc = -1;
+	int bt_fm_chip_type = (int)BT_FM_UNKNOWN_DEVICE;
+	
+    /* get bt/fm chip type from the device feature configuration (.xml file) */
+    bt_fm_chip_type = get_bt_fm_device_type();
+    if(-1 == bt_fm_chip_type)
+    {
+		pr_err("%s: Get Bt chip type failed.\n",__func__);
+	    return;
+    }
+
+	pr_err("%s: Current Bt chip is %d.\n",__func__,bt_fm_chip_type);
+
+	if(BT_FM_BROADCOM_BCM4330 != bt_fm_chip_type)
+	{
+		return;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(pm8038_gpios_hw); i++) 
+	{
+		rc = pm8xxx_gpio_config(pm8038_gpios_hw[i].gpio,
+					&pm8038_gpios_hw[i].config);
+		if (rc) 
+		{
+			pr_err("%s: pm8xxx_gpio_config: rc=%d\n", __func__, rc);
+			break;
+		}
+	}
+    pr_err("%s: bcm sleep clock init succed.\n",__func__);
+	return;
+}
+#endif
 void __init msm8930_pm8038_gpio_mpp_init(void)
 {
 	int i, rc;
+	int number=0;
 
+	/*if product config need to change the type, it will read and change it*/
 	for (i = 0; i < ARRAY_SIZE(pm8038_gpios); i++) {
+			number = pm8038_gpios[i].gpio - PM8038_GPIO_BASE + 1;
+			switch (get_pmic_gpio_type(number)){
+			case PMIC_GPIO_INPUT:
+				printk("changing pmic gpio=%d to PMIC_GPIO_INPUT\n", number);
+				PM8038_GPIO_INPUT_COPY(pm8038_gpios[i], number, PM_GPIO_PULL_UP_30);
+				break;
+			case PMIC_GPIO_OUTPUT:
+				printk("changing pmic gpio=%d to PMIC_GPIO_OUTPUT\n", number);
+				PM8038_GPIO_OUTPUT_VIN_COPY(pm8038_gpios[i], number, 0, PM8038_GPIO_VIN_VPH);
+				break;
+			default:
+				break;
+		}
+
 		rc = pm8xxx_gpio_config(pm8038_gpios[i].gpio,
 					&pm8038_gpios[i].config);
 		if (rc) {
@@ -206,6 +345,17 @@ void __init msm8930_pm8038_gpio_mpp_init(void)
 			break;
 		}
 	}
+
+	#ifdef CONFIG_HUAWEI_GPIO_UNITE
+	rc = hw_pm8038_gpio_init();
+	if (rc) 
+	{
+		pr_err("%s: hw_pm8038_gpio_init: rc=%d\n", __func__, rc);
+	}
+	#endif
+#ifdef CONFIG_HUAWEI_KERNEL
+	hw_msm8930_gpio_init();
+#endif
 }
 
 void __init msm8930_pm8917_gpio_mpp_init(void)
@@ -265,6 +415,11 @@ static struct pm8xxx_adc_amux pm8038_adc_channels_data[] = {
 		ADC_DECIMATION_TYPE2, ADC_SCALE_XOTHERM},
 	{"pa_therm0", ADC_MPP_1_AMUX3, CHAN_PATH_SCALING1, AMUX_RSV1,
 		ADC_DECIMATION_TYPE2, ADC_SCALE_PA_THERM},
+	/* use ADC_MPP_1_AMUX6 channel to read pa_therm_mpp5 */
+#ifdef CONFIG_HUAWEI_KERNEL
+	{"pa_therm_mpp5", ADC_MPP_1_AMUX6, CHAN_PATH_SCALING1, AMUX_RSV1,
+		ADC_DECIMATION_TYPE2, ADC_SCALE_PA_THERM},
+#endif
 };
 
 static struct pm8xxx_adc_properties pm8038_adc_data = {
@@ -295,8 +450,14 @@ static struct pm8xxx_mpp_platform_data pm8xxx_mpp_pdata __devinitdata = {
 };
 
 static struct pm8xxx_rtc_platform_data pm8xxx_rtc_pdata __devinitdata = {
+#ifdef CONFIG_HUAWEI_FEATURE_POWEROFF_ALARM
+	/* do not write the time into rtc register, use timerservice to set offset */
+	.rtc_write_enable	= false,
+	.rtc_alarm_powerup	= true,
+#else
 	.rtc_write_enable	= false,
 	.rtc_alarm_powerup	= false,
+#endif
 };
 
 static struct pm8xxx_pwrkey_platform_data pm8xxx_pwrkey_pdata = {
@@ -343,6 +504,35 @@ static struct pm8921_charger_platform_data pm8921_chg_pdata __devinitdata = {
 #define PM8XXX_LED_PWM_DUTY_MS		20
 #define PM8038_RGB_LED_MAX_CURRENT	12
 
+#ifdef CONFIG_HUAWEI_KERNEL
+static struct led_info pm8038_led_info[] = {
+	[0] = {
+		.name			= "wled",
+		.default_trigger	= "bkl_trigger",
+	},
+	[1] = {
+		.name			= "red",
+	},
+	[2] = {
+		.name			= "green",
+	},
+	[3] = {
+		.name			= "blue",
+	},
+	[4] = {
+		.name			= "button-backlight",
+		.gpio			= PM8038_MPP_PM_TO_SYS(3),
+	},
+	[5] = {
+		.name			= "keyboard-backlight",
+		.gpio			= PM8038_MPP_PM_TO_SYS(4),
+	},
+	[6] = {
+		.name			= "ptt_led",
+		.gpio			= PM8038_MPP_PM_TO_SYS(4),
+	},
+};
+#else
 static struct led_info pm8038_led_info[] = {
 	[0] = {
 		.name			= "wled",
@@ -359,6 +549,7 @@ static struct led_info pm8038_led_info[] = {
 		.name			= "led:rgb_blue",
 	},
 };
+#endif
 
 static struct led_platform_data pm8038_led_core_pdata = {
 	.num_leds = ARRAY_SIZE(pm8038_led_info),
@@ -369,12 +560,16 @@ static struct wled_config_data wled_cfg = {
 	.dig_mod_gen_en = true,
 	.cs_out_en = true,
 	.ctrl_delay_us = 0,
+	#ifdef CONFIG_FB_PM8038_CABC_PIN
+	.cabc_en = true,
+	#endif
 	.op_fdbck = true,
 	.ovp_val = WLED_OVP_32V,
 	.boost_curr_lim = WLED_CURR_LIMIT_525mA,
-	.num_strings = 1,
+	.num_strings = 2,
 };
-
+/*disable this code because we don't use breathing led*/
+#ifndef CONFIG_HUAWEI_KERNEL
 static int pm8038_led0_pwm_duty_pcts[56] = {
 		1, 4, 8, 12, 16, 20, 24, 28, 32, 36,
 		40, 44, 46, 52, 56, 60, 64, 68, 72, 76,
@@ -395,13 +590,14 @@ static struct pm8xxx_pwm_duty_cycles pm8038_led0_pwm_duty_cycles = {
 	.duty_ms = PM8XXX_LED_PWM_DUTY_MS,
 	.start_idx = 1,
 };
-
+#endif
 static struct pm8xxx_led_config pm8038_led_configs[] = {
 	[0] = {
 		.id = PM8XXX_ID_WLED,
 		.mode = PM8XXX_LED_MODE_MANUAL,
-		.max_current = PM8038_WLED_MAX_CURRENT,
-		.default_state = 0,
+		.max_current = PM8038_WLED_MAX_CURRENT - 1, //set to 24mA
+		/*open wled module*/
+		.default_state = 1,
 		.wled_cfg = &wled_cfg,
 	},
 	[1] = {
@@ -410,7 +606,9 @@ static struct pm8xxx_led_config pm8038_led_configs[] = {
 		.max_current = PM8038_RGB_LED_MAX_CURRENT,
 		.pwm_channel = 5,
 		.pwm_period_us = PM8XXX_LED_PWM_PERIOD,
+		#ifndef CONFIG_HUAWEI_KERNEL
 		.pwm_duty_cycles = &pm8038_led0_pwm_duty_cycles,
+		#endif
 	},
 	[2] = {
 		.id = PM8XXX_ID_RGB_LED_GREEN,
@@ -418,7 +616,9 @@ static struct pm8xxx_led_config pm8038_led_configs[] = {
 		.max_current = PM8038_RGB_LED_MAX_CURRENT,
 		.pwm_channel = 4,
 		.pwm_period_us = PM8XXX_LED_PWM_PERIOD,
+		#ifndef CONFIG_HUAWEI_KERNEL
 		.pwm_duty_cycles = &pm8038_led0_pwm_duty_cycles,
+		#endif
 	},
 	[3] = {
 		.id = PM8XXX_ID_RGB_LED_BLUE,
@@ -426,10 +626,25 @@ static struct pm8xxx_led_config pm8038_led_configs[] = {
 		.max_current = PM8038_RGB_LED_MAX_CURRENT,
 		.pwm_channel = 3,
 		.pwm_period_us = PM8XXX_LED_PWM_PERIOD,
+		#ifndef CONFIG_HUAWEI_KERNEL
 		.pwm_duty_cycles = &pm8038_led0_pwm_duty_cycles,
+		#endif
+	},
+#ifdef CONFIG_HUAWEI_KERNEL
+	[4] = {
+		.id = PM8XXX_ID_LED_KB_LIGHT,
+		.mode = PM8XXX_LED_MODE_MANUAL,
+	},
+	[5] = {
+		.id = PM8XXX_ID_LED_0,  //use this ID for qwerty keyboard
+		.mode = PM8XXX_LED_MODE_MANUAL,
+	},
+#endif
+	[6] = {
+		.id = PM8XXX_ID_LED_1,  //share kb and PTT as it uses same MPP4
+		.mode = PM8XXX_LED_MODE_MANUAL,
 	},
 };
-
 static struct pm8xxx_led_platform_data pm8xxx_leds_pdata = {
 	.led_core = &pm8038_led_core_pdata,
 	.configs = pm8038_led_configs,
@@ -453,7 +668,8 @@ static struct pm8xxx_misc_platform_data pm8xxx_misc_pdata = {
 
 static struct pm8xxx_spk_platform_data pm8xxx_spk_pdata = {
 	.spk_add_enable		= false,
-	.cd_ng_threshold	= 0x6,
+    /* Case 01037575 Reduce the noise gate threshold to fix music intermittent problem*/
+	.cd_ng_threshold	= 0x0,
 	.cd_nf_preamp_bias	= 0x1,
 	.cd_ng_hold		= 0x6,
 	.cd_ng_max_atten	= 0x0,
@@ -478,6 +694,14 @@ static struct pm8921_bms_platform_data pm8921_bms_pdata __devinitdata = {
 	.alarm_high_mv			= 4000,
 };
 
+#ifdef CONFIG_HUAWEI_KERNEL
+struct pm8xxx_vibrator_platform_data pm8xxx_vibrator_pdata = {
+    .initial_vibrate_ms = 500,
+    .max_timeout_ms     = 15000,//15 s
+    .min_timeout_ms     = 10,//10 ms
+    .level_mV           = 3000,
+};
+#endif
 static struct pm8038_platform_data pm8038_platform_data __devinitdata = {
 	.irq_pdata		= &pm8xxx_irq_pdata,
 	.gpio_pdata		= &pm8xxx_gpio_pdata,
@@ -492,6 +716,9 @@ static struct pm8038_platform_data pm8038_platform_data __devinitdata = {
 	.leds_pdata		= &pm8xxx_leds_pdata,
 	.ccadc_pdata		= &pm8xxx_ccadc_pdata,
 	.spk_pdata		= &pm8xxx_spk_pdata,
+#ifdef CONFIG_HUAWEI_KERNEL
+	.vibrator_pdata = &pm8xxx_vibrator_pdata,
+#endif
 };
 
 static struct msm_ssbi_platform_data msm8930_ssbi_pm8038_pdata __devinitdata = {
@@ -598,6 +825,5 @@ void __init msm8930_init_pmic(void)
 			pm8921_chg_pdata.has_dc_supply = true;
 	}
 
-	if (!machine_is_msm8930_mtp())
-		pm8921_chg_pdata.battery_less_hardware = 1;
+/* modify for 1.7232 baseline upgrade */
 }

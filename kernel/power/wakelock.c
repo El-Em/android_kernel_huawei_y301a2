@@ -137,10 +137,21 @@ static int wakelock_stats_show(struct seq_file *m, void *unused)
 			"\ttotal_time\tsleep_time\tmax_time\tlast_change\n");
 	list_for_each_entry(lock, &inactive_locks, link)
 		ret = print_lock_stat(m, lock);
+
+#ifdef CONFIG_HUAWEI_KERNEL
+	ret = seq_printf(m,"!\n!\n!\n");        /* print seperate sign */
+
+	for (type = 0; type < WAKE_LOCK_TYPE_COUNT; type++) {
+		list_for_each_entry(lock, &active_wake_locks[type], link)
+			ret = print_lock_stat(m, lock);
+		ret = seq_printf(m,"!\n!\n!\n");    /* print seperate sign */
+	}
+#else
 	for (type = 0; type < WAKE_LOCK_TYPE_COUNT; type++) {
 		list_for_each_entry(lock, &active_wake_locks[type], link)
 			ret = print_lock_stat(m, lock);
 	}
+#endif
 	spin_unlock_irqrestore(&list_lock, irqflags);
 	return 0;
 }

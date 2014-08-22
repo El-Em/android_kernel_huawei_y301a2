@@ -45,6 +45,10 @@
 
 #include "queue.h"
 
+#ifdef CONFIG_HUAWEI_KERNEL
+#include <linux/debugfs.h>
+#endif
+
 MODULE_ALIAS("mmc:block");
 #ifdef MODULE_PARAM_PREFIX
 #undef MODULE_PARAM_PREFIX
@@ -57,7 +61,9 @@ MODULE_ALIAS("mmc:block");
 #define INAND_CMD38_ARG_SECERASE 0x80
 #define INAND_CMD38_ARG_SECTRIM1 0x81
 #define INAND_CMD38_ARG_SECTRIM2 0x88
+#define MMC_BLK_TIMEOUT_MS  (10 * 60 * 1000)        /* 10 minute timeout */
 
+#define MMC_BLK_TIMEOUT_MS  (10 * 60 * 1000)        /* 10 minute timeout */
 #define MMC_SANITIZE_REQ_TIMEOUT 240000 /* msec */
 
 #define mmc_req_rel_wr(req)	(((req->cmd_flags & REQ_FUA) || \
@@ -132,6 +138,50 @@ enum {
 	MMC_PACKED_N_ZERO,
 	MMC_PACKED_N_SINGLE,
 };
+
+#ifdef CONFIG_HUAWEI_KERNEL
+
+static struct dentry *dentry_mmclog;
+static u64 rwlog_enable_flag = 0;   /* 0 : Disable , 1: Enable */
+static u64 rwlog_index = 0;     /* device index, 0: for emmc */
+int mmc_debug_mask = 0;
+
+static int rwlog_enable_set(void *data, u64 val)           
+{
+    rwlog_enable_flag = val;
+    return 0;                                       
+}                                                       
+static int rwlog_enable_get(void *data, u64 *val)	        
+{                                                       
+	*val = rwlog_enable_flag;                           
+	return 0;                                       
+}                                                       
+static int rwlog_index_set(void *data, u64 val)           
+{
+    rwlog_index = val;
+    return 0;                                       
+}                                                       
+static int rwlog_index_get(void *data, u64 *val)	        
+{                                                       
+	*val = rwlog_index;                           
+	return 0;                                       
+}                                                       
+static int debug_mask_set(void *data, u64 val)           
+{
+    mmc_debug_mask = (int)val;
+    return 0;                                       
+}                                                       
+static int debug_mask_get(void *data, u64 *val)	        
+{                                                       
+	*val = (u64)mmc_debug_mask;                           
+	return 0;                                       
+}                                                       
+
+DEFINE_SIMPLE_ATTRIBUTE(rwlog_enable_fops,rwlog_enable_get, rwlog_enable_set, "%llu\n");
+DEFINE_SIMPLE_ATTRIBUTE(rwlog_index_fops,rwlog_index_get, rwlog_index_set, "%llu\n");
+DEFINE_SIMPLE_ATTRIBUTE(debug_mask_fops,debug_mask_get, debug_mask_set, "%llu\n");
+
+#endif
 
 module_param(perdev_minors, int, 0444);
 MODULE_PARM_DESC(perdev_minors, "Minors numbers to allocate per device");
@@ -1019,9 +1069,6 @@ retry:
 			goto out;
 	}
 
-	if (mmc_can_sanitize(card))
-		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-				 EXT_CSD_SANITIZE_START, 1, 0);
 out_retry:
 	if (err && !mmc_blk_reset(md, card->host, type))
 		goto retry;
@@ -1169,11 +1216,25 @@ static int mmc_blk_err_check(struct mmc_card *card,
 	 */
 	if (!mmc_host_is_spi(card->host) && rq_data_dir(req) != READ) {
 		u32 status;
+		unsigned long timeout;
+
+		timeout = jiffies + msecs_to_jiffies(MMC_BLK_TIMEOUT_MS);
 		do {
 			int err = get_card_status(card, &status, 5);
 			if (err) {
 				pr_err("%s: error %d requesting status\n",
 				       req->rq_disk->disk_name, err);
+				return MMC_BLK_CMD_ERR;
+			}
+
+			/* Timeout if the device never becomes ready for data
+			 * and never leaves the program state.
+			 */
+			if (time_after(jiffies, timeout)) {
+				pr_err("%s: Card stuck in programming state!"\
+					" %s %s\n", mmc_hostname(card->host),
+					req->rq_disk->disk_name, __func__);
+
 				return MMC_BLK_CMD_ERR;
 			}
 			/*
@@ -1383,7 +1444,24 @@ static void mmc_blk_rw_rq_prep(struct mmc_queue_req *mqrq,
 		brq->sbc.flags = MMC_RSP_R1 | MMC_CMD_AC;
 		brq->mrq.sbc = &brq->sbc;
 	}
-
+#ifdef CONFIG_HUAWEI_KERNEL	
+    if(1 == rwlog_enable_flag)
+    {
+    	if(	brq->cmd.opcode == MMC_WRITE_MULTIPLE_BLOCK 
+    		|| brq->cmd.opcode == MMC_WRITE_BLOCK
+    		|| brq->cmd.opcode == MMC_READ_MULTIPLE_BLOCK
+    		|| brq->cmd.opcode == MMC_READ_SINGLE_BLOCK) 
+    	{
+            /* only mmc rw log is output */	    
+            if(rwlog_index == card->host->index)
+            {
+            	printk("%s:cmd=%d,brq->data.blocks=%d,index=%d,arg=%x\n",__func__,
+            	(int)brq->cmd.opcode,brq->data.blocks,card->host->index,brq->cmd.arg);
+            }
+    	}
+    }
+#endif	
+    
 	mmc_set_data_timeout(&brq->data, card);
 
 	brq->data.sg = mqrq->sg;
@@ -2076,10 +2154,26 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 		/* complete ongoing async transfer before issuing discard */
 		if (card->host->areq)
 			mmc_blk_issue_rw_rq(mq, NULL);
+		/*remove the secdiscard of sandisk to reduse time of erase*/
+#ifdef CONFIG_HUAWEI_KERNEL
+        if(EMMC_SANDISK_MANFID == card->cid.manfid)
+        {
+            ret = mmc_blk_issue_discard_rq(mq, req); 
+        }
+		else
+		{
+            if (req->cmd_flags & REQ_SECURE)
+	            ret = mmc_blk_issue_secdiscard_rq(mq, req);
+            else
+	            ret = mmc_blk_issue_discard_rq(mq, req);
+		}
+
+#else
 		if (req->cmd_flags & REQ_SECURE)
 			ret = mmc_blk_issue_secdiscard_rq(mq, req);
 		else
 			ret = mmc_blk_issue_discard_rq(mq, req);
+#endif
 	} else if (req && req->cmd_flags & REQ_FLUSH) {
 		/* complete ongoing async transfer before issuing flush */
 		if (card->host->areq)
@@ -2584,6 +2678,19 @@ static int __init mmc_blk_init(void)
 	res = mmc_register_driver(&mmc_driver);
 	if (res)
 		goto out2;
+
+#ifdef CONFIG_HUAWEI_KERNEL	
+   	dentry_mmclog = debugfs_create_dir("hw_mmclog", NULL);
+    if(dentry_mmclog )
+    {
+        debugfs_create_file("rwlog_enable", S_IFREG|S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH,
+            dentry_mmclog, NULL, &rwlog_enable_fops);
+        debugfs_create_file("rwlog_index", S_IFREG|S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH,
+            dentry_mmclog, NULL, &rwlog_index_fops);
+        debugfs_create_file("debug_mask", S_IFREG|S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH,
+            dentry_mmclog, NULL, &debug_mask_fops);
+    }
+#endif	
 
 	return 0;
  out2:

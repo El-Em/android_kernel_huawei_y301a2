@@ -531,6 +531,15 @@ config MMC_MSM_SDC4_8_BIT_SUPPORT
 	default n
 	help
 	  Select Y to enable 8bit support for Slot 4.
+	  
+config MMC_MSM_SDC4_DUMMY52_REQUIRED
+	boolean "Send dummy 52 read for SDC4"
+	depends on MMC_MSM_SDC4_SUPPORT
+	default Y
+	help
+	  Select Y to enable sending dummy 52 reads to complete
+	  all data commands.  Required for some SDIO cards.
+	  If unsure, say N.
 
 config MMC_MSM_SDC5_SUPPORT
 	boolean "Qualcomm SDC5 support"

@@ -110,6 +110,9 @@ enum dsi_trigger_type {
 
 #define DSI_INTR_ERROR_MASK		BIT(25)
 #define DSI_INTR_ERROR			BIT(24)
+/*add qcom patch to solve esd issue*/
+#define DSI_INTR_BTA_DONE_MASK		BIT(21)
+#define DSI_INTR_BTA_DONE		BIT(20)
 #define DSI_INTR_VIDEO_DONE_MASK	BIT(17)
 #define DSI_INTR_VIDEO_DONE		BIT(16)
 #define DSI_INTR_CMD_MDP_DONE_MASK	BIT(9)
@@ -118,6 +121,8 @@ enum dsi_trigger_type {
 #define DSI_INTR_CMD_DMA_DONE		BIT(0)
 
 #define DSI_MDP_TERM	BIT(8)
+/*add qcom patch to solve esd issue*/
+#define DSI_BTA_TERM	BIT(1)
 #define DSI_CMD_TERM	BIT(0)
 
 #define DSI_CMD_TRIGGER_NONE		0x0	/* mdp trigger */
@@ -188,7 +193,12 @@ struct dsi_clk_desc {
 #define DSI_HDR_DATA1(data)	((data) & 0x0ff)
 #define DSI_HDR_WC(wc)		((wc) & 0x0ffff)
 
+/*DSI_BUF_SIZE 64 is not enough for our lcd commands,change back to 1024*/
+#ifndef CONFIG_HUAWEI_KERNEL
 #define DSI_BUF_SIZE	64
+#else
+#define DSI_BUF_SIZE	1024
+#endif
 #define MIPI_DSI_MRPS	0x04	/* Maximum Return Packet Size */
 
 #define MIPI_DSI_LEN 8 /* 4 x 4 - 6 - 2, bytes dcs header+crc-align  */
@@ -262,7 +272,9 @@ struct dsi_kickoff_action {
 #define CMD_REQ_MAX	4
 
 typedef void (*fxn)(u32 data);
-
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+typedef void (*fxn_hw)(char *data);
+#endif
 #define CMD_REQ_RX	0x0001
 #define CMD_REQ_COMMIT	0x0002
 #define CMD_CLK_CTRL	0x0004
@@ -274,6 +286,9 @@ struct dcs_cmd_req {
 	u32 flags;
 	int rlen;	/* rx length */
 	fxn cb;
+#ifdef CONFIG_HUAWEI_ENABLE_MIPI_READ
+	fxn_hw cb_hw;
+#endif
 };
 
 struct dcs_cmd_list {
@@ -307,6 +322,10 @@ void mipi_dsi_cmd_mdp_start(void);
 int mipi_dsi_ctrl_lock(int mdp);
 int mipi_dsi_ctrl_lock_query(void);
 void mipi_dsi_cmd_bta_sw_trigger(void);
+/*add qcom patch to solve esd issue*/
+#ifdef CONFIG_HW_ESD_DETECT
+int mipi_dsi_wait_for_bta_ack(void);
+#endif
 void mipi_dsi_ack_err_status(void);
 void mipi_dsi_set_tear_on(struct msm_fb_data_type *mfd);
 void mipi_dsi_set_tear_off(struct msm_fb_data_type *mfd);

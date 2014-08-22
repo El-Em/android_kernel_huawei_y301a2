@@ -35,6 +35,10 @@
 
 #include <asm/fb.h>
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG	
+#include <linux/time.h>
+#include "msm/msm_fb.h"
+#endif
 
     /*
      *  Frame buffer device initialization and setup routines
@@ -45,6 +49,19 @@
 static DEFINE_MUTEX(registration_lock);
 struct fb_info *registered_fb[FB_MAX] __read_mostly;
 int num_registered_fb __read_mostly;
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+static int  record_start_flag =0;
+static int  record_start_change_flag =0;
+unsigned int fb_pan_point_offset = 0;
+unsigned int fb_pan_point_end_offset = 0;
+
+static char   *fbmem_pan_time_buffer = NULL;
+extern char *mipi_dsi_time_buffer;
+extern char *mdp_dma_display_buffer;
+extern char *mipi_send_vsync_buffer;
+extern char *vsync_ctrl_time_buffer ;
+extern char *mdp_dma_end_display_buffer;
+#endif
 
 static struct fb_info *get_fb_info(unsigned int idx)
 {
@@ -873,12 +890,229 @@ fb_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
 	return (cnt) ? cnt : err;
 }
 
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+/*****************************************
+  @func_name:  display_debug_record_start
+  @para:  void
+  @func:  return the start flag
+              for  other function  start debug  record 
+  @return start record debug flsg ,1:stasrt  ;0: no start
+******************************************/
+int display_debug_record_start(void)
+{
+   return record_start_flag;
+}
+EXPORT_SYMBOL(display_debug_record_start);
+/*****************************************
+  @func_name:  write_data_to_file
+  @para:  filename: write efs  path
+               record_buffer:  the data  buffer
+  @func:   write the record buffer data to efs
+  @return  start record debug flsg ,1:ok  ;-1: error
+******************************************/
+static int write_data_to_file(char* filename,char *record_buffer)
+{
+	mm_segment_t oldfs;
+	struct file	*filp;
+	uint16_t	length;
+	
+   	 length = strlen(record_buffer) ;
+
+	oldfs = get_fs();
+	set_fs(KERNEL_DS);
+	filp = filp_open(filename, O_RDWR|O_CREAT |O_APPEND  , 0777);
+     
+	if (IS_ERR(filp))
+	{
+		printk("%s: file %s filp_open error\n", __FUNCTION__,filename);
+		set_fs(oldfs);
+		return -1;
+	}
+
+	printk("TS:%s: file %s open success \n", __FUNCTION__,filename);
+
+	if (!filp->f_op)
+	{
+		printk("%s: File Operation Method Error\n", __FUNCTION__);
+		filp_close(filp, NULL);
+		set_fs(oldfs);
+		return -1;
+	}
+
+	/* write data */
+	if (filp->f_op->write(filp, record_buffer, length, &filp->f_pos) != length)
+	{
+		printk("%s: file write error\n", __FUNCTION__);
+		filp_close(filp, NULL);
+		set_fs(oldfs);
+		return -1;
+	}
+    
+
+	filp_close(filp, NULL);
+	set_fs(oldfs);
+	return 0;
+}
+/*****************************************
+  @func_name:  display_free_all_frame
+  @para: void
+  @func:   release the buffer that malloc for record
+  @return  no
+******************************************/
+static void  display_free_all_frame(void)
+{
+	if(NULL != mdp_dma_display_buffer)
+	{
+		kfree(mdp_dma_display_buffer);
+	}
+
+	if(NULL != mipi_dsi_time_buffer)
+	{
+		kfree(mipi_dsi_time_buffer);
+	}
+
+	if(NULL != fbmem_pan_time_buffer)
+	{
+		kfree(fbmem_pan_time_buffer);
+	}
+
+	if(NULL != mipi_send_vsync_buffer)
+	{
+		kfree(mipi_send_vsync_buffer);
+	}
+
+	if(NULL != vsync_ctrl_time_buffer)
+	{
+		kfree(vsync_ctrl_time_buffer);
+	}
+
+	
+	if(NULL != mdp_dma_end_display_buffer)
+	{
+		kfree(mdp_dma_end_display_buffer);
+	}
+	
+}
+
+/*****************************************
+  @func_name:  display_record_reset_frame
+  @para: flag: start ir  stop debug record,
+  @func:  we start debug and malloc  the buffer
+  @return  void
+******************************************/
+static void  display_record_reset_frame(int flag)
+{
+	 char *mipi_dsi_filename = "/data/performancetest/13_time_mipi_dsi_isr.txt";
+	 char *msm_fb_filename = "/data/performancetest/11_time_msm_fb.txt";
+	 char *mdp_dma_filename = "/data/performancetest/12_time_mdp_dma_pan.txt";
+	 char *send_vsync_time_filename = "/data/performancetest/14_time_send_vsync_time.txt";
+	 char *vsync_ctrl_time_filename = "/data/performancetest/15_time_vsync_ctrl_time.txt";
+	 char *mdp_dma_end_filename = "/data/performancetest/16_time_mdp_dma_end_pan.txt";
+	 
+	if(1 == record_start_change_flag)
+	{
+		if(1 == flag)	
+		{
+			/*  malloc the required bufer  **/
+			mdp_dma_display_buffer = kzalloc(RECORD_BUFFER_SIZE, GFP_KERNEL);
+			mipi_dsi_time_buffer = kzalloc(RECORD_BUFFER_SIZE, GFP_KERNEL);
+			fbmem_pan_time_buffer = kzalloc(RECORD_BUFFER_SIZE, GFP_KERNEL);
+			mipi_send_vsync_buffer = kzalloc(RECORD_BUFFER_SIZE, GFP_KERNEL);
+			vsync_ctrl_time_buffer = kzalloc(RECORD_BUFFER_SIZE, GFP_KERNEL);
+			mdp_dma_end_display_buffer = kzalloc(RECORD_BUFFER_SIZE, GFP_KERNEL);
+
+			if((NULL == mdp_dma_display_buffer)||(NULL == mipi_dsi_time_buffer)
+			||(NULL == fbmem_pan_time_buffer)||(NULL == mipi_send_vsync_buffer)
+			||(NULL == vsync_ctrl_time_buffer)||(NULL == mdp_dma_end_display_buffer))
+			{
+				display_free_all_frame();
+				record_start_flag =0;
+			}
+			else
+			{
+				 record_start_flag = 1;
+			}
+				
+
+		}
+		else
+		{
+			/*  data have write  to efs ,release buffer */
+			write_data_to_file(msm_fb_filename,fbmem_pan_time_buffer);
+			write_data_to_file(mdp_dma_filename,mdp_dma_display_buffer);
+			write_data_to_file(mipi_dsi_filename,mipi_dsi_time_buffer); 
+			write_data_to_file(send_vsync_time_filename,mipi_send_vsync_buffer); 
+			write_data_to_file(vsync_ctrl_time_filename,vsync_ctrl_time_buffer); 
+			write_data_to_file(mdp_dma_end_filename,mdp_dma_end_display_buffer); 
+
+			display_free_all_frame();
+
+			record_start_flag = flag;
+
+		}
+		record_start_change_flag	 = 0;
+	}  
+}
+/*****************************************
+  @func_name:  display_set_record_start
+  @para: flag: start ir  stop debug record
+  @func:  if we  begin test the TP,the apk set  point  and 
+              run  the  function
+  @return  void
+******************************************/
+void  display_set_record_start(int flag)
+{
+	printk("display_set_record_start record_start_flag = %d\n", flag);
+	record_start_change_flag = 1;
+	display_record_reset_frame(flag);
+}
+
+EXPORT_SYMBOL(display_set_record_start);
+/*****************************************
+  @func_name:  fb_pan_display_time
+  @para: void
+  @func: revord the display frame firtst input time
+  @return  void
+******************************************/
+void  fb_pan_display_time(void)
+{ 
+	struct timespec ts;
+	long report_pointer_time_ms = 0;
+	static  unsigned int i=0;
+
+	if(0 == display_debug_record_start())
+	{
+        	return;
+	}
+
+
+	fb_pan_point_offset  = strlen(fbmem_pan_time_buffer);	
+	
+	/* calcule the time  */
+	ktime_get_ts(&ts);
+	report_pointer_time_ms = ts.tv_sec*1000 + ts.tv_nsec/1000000; 
+
+	sprintf((fbmem_pan_time_buffer+fb_pan_point_offset),"%d%s%ld%s%s",\
+	i++,DISPLAY_BREAK ,report_pointer_time_ms,DISPLAY_BREAK,"\n");
+
+	/*  check the buffer out  */
+	if(RECORD_BUFFER_THRESHOLD < fb_pan_point_offset)
+	{
+		memset(fbmem_pan_time_buffer,0,sizeof(fbmem_pan_time_buffer));
+	}
+	
+}
+#endif
 int
 fb_pan_display(struct fb_info *info, struct fb_var_screeninfo *var)
 {
 	struct fb_fix_screeninfo *fix = &info->fix;
 	unsigned int yres = info->var.yres;
 	int err = 0;
+#ifdef CONFIG_FEATURE_HW_DISP_TEST_DBG
+	/* record  the dma first display time */  
+	fb_pan_display_time();
+#endif
 
 	if (var->yoffset > 0) {
 		if (var->vmode & FB_VMODE_YWRAP) {

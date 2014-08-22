@@ -32,6 +32,9 @@
 #include "msm_camera_i2c.h"
 #include "msm_camera_eeprom.h"
 #include "msm_sensor_common.h"
+#include "hsad/config_interface.h"
+
+#define CAMERA_NAME_LEN 128  //this size is same with CAMERA_NAME_LEN in board_msm7627a_camera.c
 
 void msm_sensor_start_stream(struct msm_sensor_ctrl_t *s_ctrl);
 void msm_sensor_stop_stream(struct msm_sensor_ctrl_t *s_ctrl);

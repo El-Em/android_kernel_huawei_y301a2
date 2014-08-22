@@ -94,6 +94,14 @@
 #define MSM_GSBI11_QUP_PHYS	(MSM_GSBI11_PHYS + 0x20000)
 #define MSM_GSBI12_QUP_PHYS	(MSM_GSBI12_PHYS + 0x20000)
 #define MSM_QUP_SIZE		SZ_4K
+#ifdef CONFIG_HUAWEI_KERNEL
+#define MSM_UART11DM_PHYS	(MSM_GSBI11_PHYS + 0x10000)
+
+#define DMOV_HSUART_GSBI11_TX_CHAN 10
+#define DMOV_HSUART_GSBI11_TX_CRCI 13
+#define DMOV_HSUART_GSBI11_RX_CHAN 9 
+#define DMOV_HSUART_GSBI11_RX_CRCI 12
+#endif
 
 #define MSM_PMIC1_SSBI_CMD_PHYS	0x00500000
 #define MSM_PMIC2_SSBI_CMD_PHYS	0x00C00000
@@ -102,6 +110,24 @@
 #define MSM8960_HSUSB_PHYS		0x12500000
 #define MSM8960_HSUSB_SIZE		SZ_4K
 #define MSM8960_RPM_MASTER_STATS_BASE	0x10BB00
+
+#define MSM8960_PC_CNTR_PHYS	(MSM8960_IMEM_PHYS + 0x664)
+#define MSM8960_PC_CNTR_SIZE		0x40
+
+static struct resource msm8960_resources_pccntr[] = {
+	{
+		.start	= MSM8960_PC_CNTR_PHYS,
+		.end	= MSM8960_PC_CNTR_PHYS + MSM8960_PC_CNTR_SIZE,
+		.flags	= IORESOURCE_MEM,
+	},
+};
+
+struct platform_device msm8960_pc_cntr = {
+	.name		= "pc-cntr",
+	.id		= -1,
+	.num_resources	= ARRAY_SIZE(msm8960_resources_pccntr),
+	.resource	= msm8960_resources_pccntr,
+};
 
 static struct resource resources_otg[] = {
 	{
@@ -451,6 +477,56 @@ struct platform_device msm8960_device_uart_gsbi8 = {
 	.dev.platform_data = &uart_gsbi8_pdata,
 };
 
+/*
+ * GSBI 11 used into UARTDM Mode,Used for bluetooth
+ */
+#ifdef CONFIG_HUAWEI_KERNEL
+static struct resource msm_uart_dm11_resources[] = {
+	{		
+		.start	= MSM_UART11DM_PHYS,
+		.end		= MSM_UART11DM_PHYS + PAGE_SIZE - 1,
+		.name	= "uartdm_resource",
+		.flags	= IORESOURCE_MEM,	
+	},
+	{		
+		.start	= GSBI11_UARTDM_IRQ,
+		.end		= GSBI11_UARTDM_IRQ,
+		.flags	= IORESOURCE_IRQ,
+	},
+	{		
+		.start	= MSM_GSBI11_PHYS,
+		.end		= MSM_GSBI11_PHYS + 4 - 1,
+		.name	= "gsbi_resource",
+		.flags	= IORESOURCE_MEM,
+	},
+	{
+		.start	= DMOV_HSUART_GSBI11_TX_CHAN,
+		.end		= DMOV_HSUART_GSBI11_RX_CHAN,
+		.name	= "uartdm_channels",
+		.flags	= IORESOURCE_DMA,
+	},
+	{		
+		.start	= DMOV_HSUART_GSBI11_TX_CRCI,
+		.end		= DMOV_HSUART_GSBI11_RX_CRCI,
+		.name	= "uartdm_crci",
+		.flags	= IORESOURCE_DMA,
+	},
+};
+static u64 msm_uart_dm11_dma_mask = DMA_BIT_MASK(32);
+
+
+struct platform_device msm_device_uart_dm11 = 
+	{
+		.name	= "msm_serial_hs",
+		.id	= 3,
+		.num_resources	= ARRAY_SIZE(msm_uart_dm11_resources),
+		.resource	= msm_uart_dm11_resources,
+		.dev	= {
+			.dma_mask		= &msm_uart_dm11_dma_mask,
+			.coherent_dma_mask	= DMA_BIT_MASK(32),
+			},
+	};
+#endif
 /* MSM Video core device */
 #ifdef CONFIG_MSM_BUS_SCALING
 static struct msm_bus_vectors vidc_init_vectors[] = {
