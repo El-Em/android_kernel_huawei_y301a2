@@ -57,12 +57,16 @@ modules.builtin
 !.mailmap
 
 #
-# Generated include files
+# Generated files
 #
+out
 include/config
 include/linux/version.h
 include/generated
 arch/*/include/generated
+arch/arm/mach-msm/smd_rpc_sym.c
+drivers/huawei/hsad/config_total_product.c
+include/hsad/config_boardids.h
 
 # stgit generated dirs
 patches-*
