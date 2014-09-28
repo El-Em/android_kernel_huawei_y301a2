@@ -5,7 +5,7 @@
 # set toolchain, clean, then make.
 export ARCH=arm
 export SUBARCH=arm
-export CCOMPILER=$HOME/android/prebuilt/linux-x86/toolchain/arm-eabi-4.6/bin/arm-eabi-
+export CCOMPILER=$HOME/android/prebuilt/linux-x86/toolchain/arm-cortex_a15-linux-gnueabihf-linaro_4.8.3-2014.04/bin/arm-gnueabi-
 
 rm -r out
 make clean
