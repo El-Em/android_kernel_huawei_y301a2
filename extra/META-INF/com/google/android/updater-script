@@ -1,0 +1,6 @@
+show_progress(0.1, 0);
+ui_print("Updating Kernel");
+package_extract_file("boot.img", "/dev/block/platform/msm_sdcc.1/by-name/boot");
+show_progress(0.2, 0);
+ui_print("Finished");
+

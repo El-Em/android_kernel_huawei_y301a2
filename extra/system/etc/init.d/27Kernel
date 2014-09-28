@@ -1,0 +1,13 @@
+#!/system/bin/sh
+
+# Dirty Dynamic Page Writebacks
+echo 1 > /proc/sys/vm/dynamic_dirty_writeback
+echo 2500 > /proc/sys/vm/dirty_writeback_active_centisecs
+echo 750 > /proc/sys/vm/dirty_writeback_suspend_centisecs
+
+# ThunderSonic Sound Engine
+echo 1 > /sys/kernel/thundersonic_engine/headphone_boost
+#echo 3 > /sys/kernel/thundersonic_engine/speaker_boost
+
+# Start Frandom
+/system/bin/insmod /system/lib/modules/frandom.ko

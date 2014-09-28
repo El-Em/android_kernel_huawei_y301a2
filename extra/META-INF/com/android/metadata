@@ -1,0 +1,3 @@
+post-build=samsung/serranoltexx/serranolte:4.2.2/JDQ39/I9195XXUAMG4:user/release-keys
+post-timestamp=1379989602
+pre-device=serranolte
