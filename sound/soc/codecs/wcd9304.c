@@ -201,6 +201,17 @@ struct hpf_work {
 	struct delayed_work dwork;
 };
 
+struct locker {
+	bool enable;
+	} lock = {
+	.enable = false,
+	};
+	
+void setlock(bool val)
+{
+lock.enable = val;
+}
+
 static struct hpf_work tx_hpf_work[NUM_DECIMATORS];
 
 struct sitar_priv {
@@ -2524,6 +2535,24 @@ static int sitar_volatile(struct snd_soc_codec *ssc, unsigned int reg)
 	return 0;
 }
 
+int reg_access(unsigned int reg)
+{
+	int ret = 1;
+
+	switch (reg) {
+		case SITAR_A_RX_HPH_L_GAIN:
+		case SITAR_A_RX_HPH_R_GAIN:
+		case SITAR_A_CDC_RX1_VOL_CTL_B2_CTL:
+			if (lock.enable)
+				ret = 0;
+			break;
+		default:
+			break;
+		}
+
+	return ret;
+}
+
 #define SITAR_FORMATS (SNDRV_PCM_FMTBIT_S16_LE)
 #ifndef CONFIG_THUNDERSONIC_ENGINE_GPL
 static
@@ -2532,6 +2561,7 @@ int sitar_write(struct snd_soc_codec *codec, unsigned int reg,
 	unsigned int value)
 {
 	int ret;
+	int val;
 
 	BUG_ON(reg > SITAR_MAX_REGISTER);
 
@@ -2542,7 +2572,12 @@ int sitar_write(struct snd_soc_codec *codec, unsigned int reg,
 				reg, ret);
 	}
 
-	return wcd9xxx_reg_write(codec->control_data, reg, value);
+	if (!reg_access(reg))
+		val = wcd9xxx_reg_read(codec->control_data, reg);
+	else
+		val = value;
+
+	return wcd9xxx_reg_write(codec->control_data, reg, val);
 }
 
 #ifdef CONFIG_THUNDERSONIC_ENGINE_GPL
