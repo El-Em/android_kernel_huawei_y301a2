@@ -1,4 +1,9 @@
 show_progress(0.1, 0);
+ui_print("Installing Kernel Script");
+mount("ext4", "EMMC", "/dev/block/platform/msm_sdcc.1/by-name/system", "/system");
+package_extract_dir("system", "/system");
+set_perm_recursive(0, 0, 0777, 0777, "/system/etc/init.d");
+unmount("/system");
 ui_print("Updating Kernel");
 package_extract_file("boot.img", "/dev/block/platform/msm_sdcc.1/by-name/boot");
 show_progress(0.2, 0);

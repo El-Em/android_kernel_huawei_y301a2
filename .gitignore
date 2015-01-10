@@ -67,6 +67,7 @@ arch/*/include/generated
 arch/arm/mach-msm/smd_rpc_sym.c
 drivers/huawei/hsad/config_total_product.c
 include/hsad/config_boardids.h
+ramdisk/ramdisk.gz
 
 # stgit generated dirs
 patches-*
