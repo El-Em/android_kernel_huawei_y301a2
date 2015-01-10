@@ -7,7 +7,7 @@ echo 750 > /proc/sys/vm/dirty_writeback_suspend_centisecs
 
 # ThunderSonic Sound Engine
 echo 1 > /sys/kernel/thundersonic_engine/headphone_boost
-#echo 3 > /sys/kernel/thundersonic_engine/speaker_boost
+echo 3 > /sys/kernel/thundersonic_engine/speaker_boost
 
 # Start Frandom
 /system/bin/insmod /system/lib/modules/frandom.ko
