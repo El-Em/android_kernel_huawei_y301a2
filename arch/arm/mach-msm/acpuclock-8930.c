@@ -186,8 +186,9 @@ static struct acpu_level acpu_freq_tbl_slow[] __initdata = {
 #ifndef CONFIG_CPU_HIOVERCLOCK
 #else
         { 1, {  1458000, HFPLL, 1, 0x36 }, L2(15), 1250000 },
-        { 1, {  1566000, HFPLL, 1, 0x38 }, L2(15), 1250000 },
-        { 1, {  1674000, HFPLL, 1, 0x3E }, L2(15), 1275000 },
+        { 1, {  1512000, HFPLL, 1, 0x38 }, L2(15), 1250000 },
+        { 1, {  1620000, HFPLL, 1, 0x3C }, L2(15), 1275000 },
+        { 1, {  1728000, HFPLL, 1, 0x40 }, L2(15), 1300000 },
 #endif
 #endif
 	{ 0, { 0 } }
@@ -226,9 +227,10 @@ static struct acpu_level acpu_freq_tbl_nom[] __initdata = {
 	{ 1, {  1404000, HFPLL, 1, 0x34 }, L2(15), 1212500 },
 #ifndef CONFIG_CPU_HIOVERCLOCK
 #else
-        { 1, {  1458000, HFPLL, 1, 0x36 }, L2(15), 1225000 },
-        { 1, {  1566000, HFPLL, 1, 0x38 }, L2(15), 1225000 },
-        { 1, {  1674000, HFPLL, 1, 0x3E }, L2(15), 1250000 },
+        { 1, {  1458000, HFPLL, 1, 0x36 }, L2(15), 1212500 },
+        { 1, {  1512000, HFPLL, 1, 0x38 }, L2(15), 1225000 },
+        { 1, {  1620000, HFPLL, 1, 0x3C }, L2(15), 1237500 },
+        { 1, {  1728000, HFPLL, 1, 0x40 }, L2(15), 1250000 },
 #endif
 #endif
 	{ 0, { 0 } }
@@ -267,9 +269,10 @@ static struct acpu_level acpu_freq_tbl_fast[] __initdata = {
 	{ 1, {  1404000, HFPLL, 1, 0x34 }, L2(15), 1162500 },
 #ifndef CONFIG_CPU_HIOVERCLOCK
 #else
-        { 1, {  1458000, HFPLL, 1, 0x36 }, L2(15), 1200000 },
-        { 1, {  1566000, HFPLL, 1, 0x38 }, L2(15), 1200000 },
-        { 1, {  1674000, HFPLL, 1, 0x3E }, L2(15), 1225000 },
+        { 1, {  1458000, HFPLL, 1, 0x36 }, L2(15), 1187500 },
+        { 1, {  1512000, HFPLL, 1, 0x38 }, L2(15), 1200000 },
+        { 1, {  1620000, HFPLL, 1, 0x3C }, L2(15), 1225000 },
+        { 1, {  1728000, HFPLL, 1, 0x40 }, L2(15), 1237500 },
 #endif
 #endif
 	{ 0, { 0 } }
